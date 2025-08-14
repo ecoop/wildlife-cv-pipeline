@@ -1,0 +1,13 @@
+# Credentials & API keys
+*.env
+config/credentials.json
+
+# Data outputs
+exported_data/
+*.jpg
+*.png
+
+# Python
+__pycache__/
+*.pyc
+.venv/
