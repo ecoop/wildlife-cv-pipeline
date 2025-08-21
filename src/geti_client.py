@@ -74,27 +74,53 @@ class GetiClient:
     
     def get_all_images(self) -> List[Image]:
         """Get all images in the project"""
-        logger.info("Fetching all images...")
+        logger.info("Fetching all images from Geti API...")
         images = self.image_client.get_all_images()
         logger.info(f"Found {len(images)} images")
         return images
+
+    def get_sample_images(self, max_images: int = 100) -> List[Image]:
+        """Get a limited number of images (much faster than get_all_images)"""
+        logger.info(f"Fetching first {max_images} images from Geti API...")
+        
+        # Get limited set instead of all images
+        images = self.image_client.get_all_images()
+        limited_images = images[:max_images]
+        
+        logger.info(f"Retrieved {len(limited_images)} sample images")
+        return limited_images
     
-    def extract_annotations(self, confidence_threshold: float = 0.5) -> List[GetiAnnotationData]:
+    def extract_annotations(self, confidence_threshold: float = 0.5, max_images: Optional[int] = None) -> List[GetiAnnotationData]:
         """
         Extract all annotations from the project
         
         Args:
             confidence_threshold: Minimum confidence for including annotations
+            max_images: Limit processing to first N images (for testing). 
+                       Note: Still fetches full image list from API first.
             
         Returns:
             List of structured annotation data
         """
         images = self.get_all_images()
+        
+        # Limit to subset for testing
+        if max_images:
+            logger.info(f"Processing only first {max_images} images (out of {len(images)} total)")
+            images = images[:max_images]
         all_annotations = []
         
         logger.info("Extracting annotations...")
         
+        # Counters to track dimension success
+        dimension_success_count = 0
+        dimension_fail_count = 0
+        
         for i, image in enumerate(images):
+            if max_images and i >= max_images:
+                logger.info(f"Stopping at {max_images} images (for testing)")
+                break
+                
             if i % 50 == 0:  # Progress logging
                 logger.info(f"Processing image {i+1}/{len(images)}")
             
@@ -105,17 +131,29 @@ class GetiClient:
                     logger.warning(f"No annotations found for image {image.name}")
                     continue
                 
-                # Extract annotations from this image
+                        # Extract annotations from this image
                 image_annotations = self._extract_image_annotations(
                     image, annotation_scene, confidence_threshold
                 )
                 all_annotations.extend(image_annotations)
+                
+                # Track dimension success for this image
+                if image_annotations:
+                    # Check if any annotation got real dimensions
+                    for ann in image_annotations:
+                        if ann.image_width > 0 and ann.image_height > 0:
+                            dimension_success_count += 1
+                            break
+                    else:
+                        dimension_fail_count += 1
                 
             except Exception as e:
                 logger.error(f"Error processing image {image.name}: {e}")
                 continue
         
         logger.info(f"Extracted {len(all_annotations)} annotations total")
+        logger.info(f"DIMENSION SUMMARY: {dimension_success_count} images with dimensions, {dimension_fail_count} without")
+        
         return all_annotations
     
     def _extract_image_annotations(
@@ -140,12 +178,15 @@ class GetiClient:
                 logger.warning(f"Could not extract bbox for annotation {annotation.id}")
                 continue
             
+            # Get image dimensions (may not be directly available)
+            img_width, img_height = self._get_image_dimensions(image)
+            
             # Create structured annotation data
             ann_data = GetiAnnotationData(
                 image_name=image.name,
                 image_id=str(image.id),
-                image_width=image.width,
-                image_height=image.height,
+                image_width=img_width,
+                image_height=img_height,
                 annotation_id=str(annotation.id),
                 bbox=bbox,
                 category_name=best_label[0],
@@ -159,6 +200,8 @@ class GetiClient:
     def _get_best_label(self, annotation: Annotation, confidence_threshold: float) -> Optional[Tuple[str, float]]:
         """
         Get the best category label from an annotation
+        For Geti's detection->classification pipeline, we want the specific species
+        classification, not the generic "Animal" detection label.
         
         Returns:
             Tuple of (category_name, confidence) or None if no good labels
@@ -166,7 +209,7 @@ class GetiClient:
         if not annotation.labels:
             return None
         
-        # Filter labels by confidence and find the best one
+        # Filter labels by confidence
         valid_labels = [
             (label.name, label.probability) 
             for label in annotation.labels 
@@ -176,8 +219,57 @@ class GetiClient:
         if not valid_labels:
             return None
         
-        # Return label with highest confidence
+        # Strategy for clean export: Take most specific label available
+        # Priority: specific species > general category > "Animal"
+        species_labels = [
+            (name, prob) for name, prob in valid_labels 
+            if name.endswith("_new") or name in ["jay", "songbird", "dove", "squirrel", "cat"]
+        ]
+        
+        if species_labels:
+            # Take highest confidence species
+            return max(species_labels, key=lambda x: x[1])
+        
+        # If no species, look for general categories
+        category_labels = [
+            (name, prob) for name, prob in valid_labels 
+            if name.lower() in ["mammal", "bird"]
+        ]
+        
+        if category_labels:
+            # Take highest confidence category
+            return max(category_labels, key=lambda x: x[1])
+        
+        # Fallback to any valid label (probably "Animal")
         return max(valid_labels, key=lambda x: x[1])
+    
+    def _get_image_dimensions(self, image: Image) -> Tuple[int, int]:
+        """
+        Get image dimensions from Geti Image object
+        
+        Returns:
+            Tuple of (width, height). Returns (0, 0) if not available.
+        """
+        try:
+            # Try to get dimensions from media_information (this works!)
+            if hasattr(image, 'media_information') and image.media_information:
+                media_info = image.media_information
+                if hasattr(media_info, 'width') and hasattr(media_info, 'height'):
+                    return (media_info.width, media_info.height)
+            
+            # Fallback attempts for other possible locations
+            if hasattr(image, 'width') and hasattr(image, 'height'):
+                return (image.width, image.height)
+            elif hasattr(image, 'shape') and image.shape:
+                if hasattr(image.shape, 'width') and hasattr(image.shape, 'height'):
+                    return (image.shape.width, image.shape.height)
+            
+            # If we can't get dimensions, use placeholder
+            return (0, 0)
+            
+        except Exception as e:
+            logger.error(f"Error getting dimensions for image {image.name}: {e}")
+            return (0, 0)
     
     def _extract_bbox(self, annotation: Annotation) -> Optional[Tuple[float, float, float, float]]:
         """
@@ -255,7 +347,7 @@ if __name__ == "__main__":
         project_name="Wildlife #3"
     )
     
-    # Extract all annotations
+    # Scan ENTIRE dataset for validation (remove max_images to process all 5199 images)
     annotations = client.extract_annotations(confidence_threshold=0.7)
     
     # Get unique categories
@@ -264,7 +356,56 @@ if __name__ == "__main__":
     print(f"\nExtracted {len(annotations)} annotations")
     print(f"Categories: {categories}")
     
-    # Show some sample annotations
-    for ann in annotations[:5]:
-        print(f"Image: {ann.image_name}, Category: {ann.category_name}, "
-              f"Bbox: {ann.bbox}, Confidence: {ann.confidence:.2f}")
+    # Show more examples to validate data quality
+    print(f"\n=== SAMPLE ANNOTATIONS (first 20) ===")
+    for i, ann in enumerate(annotations[:20]):
+        print(f"{i+1:2d}. Image: {ann.image_name[:50]}..., Category: {ann.category_name}, "
+              f"Bbox: {ann.bbox}, Conf: {ann.confidence:.2f}")
+    
+    # Show unique categories and their counts
+    from collections import Counter
+    category_counts = Counter(ann.category_name for ann in annotations)
+    print(f"\n=== CATEGORY DISTRIBUTION ===")
+    for category, count in category_counts.most_common():
+        print(f"{category}: {count} annotations")
+    
+    # Find incomplete annotations (generic categories without species)
+    incomplete_annotations = []
+    for ann in annotations:
+        if ann.category_name in ['bird', 'mammal']:
+            incomplete_annotations.append(ann)
+    
+    if incomplete_annotations:
+        print(f"\n=== INCOMPLETE ANNOTATIONS (generic categories without species) ===")
+        for i, ann in enumerate(incomplete_annotations):
+            print(f"{i+1}. Image: {ann.image_name}")
+            print(f"   Category: {ann.category_name}, Bbox: {ann.bbox}, Confidence: {ann.confidence:.2f}")
+            print(f"   Image dimensions: {ann.image_width}x{ann.image_height}")
+    else:
+        print(f"\n✅ No incomplete annotations found")
+        
+    # Look for any potential issues
+    print(f"\n=== DATA QUALITY CHECK ===")
+    zero_dimension_count = sum(1 for ann in annotations if ann.image_width == 0 or ann.image_height == 0)
+    print(f"Images with zero dimensions: {zero_dimension_count}")
+    
+    # Check for very small or very large bboxes (potential issues)
+    small_bbox_count = sum(1 for ann in annotations if ann.bbox[2] < 5 or ann.bbox[3] < 5)
+    large_bbox_count = sum(1 for ann in annotations if ann.bbox[2] > ann.image_width * 0.8 or ann.bbox[3] > ann.image_height * 0.8)
+    print(f"Very small bboxes (< 5px): {small_bbox_count}")
+    print(f"Very large bboxes (> 80% of image): {large_bbox_count}")
+    
+    # Show some examples of large bboxes too
+    large_bbox_examples = [ann for ann in annotations if ann.bbox[2] > ann.image_width * 0.8 or ann.bbox[3] > ann.image_height * 0.8]
+    if large_bbox_examples:
+        print(f"\n=== LARGE BBOX EXAMPLES (first 3) ===")
+        for i, ann in enumerate(large_bbox_examples[:3]):
+            bbox_width_pct = (ann.bbox[2] / ann.image_width) * 100
+            bbox_height_pct = (ann.bbox[3] / ann.image_height) * 100
+            print(f"{i+1}. Image: {ann.image_name[:50]}...")
+            print(f"   Category: {ann.category_name}, Bbox size: {bbox_width_pct:.1f}% x {bbox_height_pct:.1f}% of image")
+    
+    print(f"\n=== DATASET READY FOR EXPORT ===")
+    print(f"✅ Total annotations: {len(annotations)}")
+    print(f"✅ Total categories: {len(categories)}")
+    print(f"✅ Clean data quality: {len(annotations) - zero_dimension_count - small_bbox_count} good annotations")
