@@ -37,4 +37,6 @@ Thumbs.db
 *.log
 
 # Backup files
-*_backup.json
+*_backup.jsonanimal_review/
+annotation_recoding/
+training_results/
