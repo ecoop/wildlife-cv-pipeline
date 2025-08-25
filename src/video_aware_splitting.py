@@ -25,7 +25,7 @@ class VideoAwareDatasetSplitter:
         # Ensure ratios sum to 1
         total_ratio = train_ratio + val_ratio + test_ratio
         if abs(total_ratio - 1.0) > 0.001:
-            print(f"⚠️  Ratios sum to {total_ratio}, normalizing...")
+            print(f"Warning: Ratios sum to {total_ratio}, normalizing...")
             self.train_ratio = train_ratio / total_ratio
             self.val_ratio = val_ratio / total_ratio
             self.test_ratio = test_ratio / total_ratio
@@ -176,3 +176,283 @@ class VideoAwareDatasetSplitter:
         print(f"  Test: {len(splits['test'])} videos")
         
         return splits
+    
+    def create_split_annotations(self, video_annotations, splits, coco_data):
+        """Create separate annotation files for each split"""
+        print(f"\n=== CREATING SPLIT ANNOTATIONS ===")
+        
+        # Base structure for each split
+        base_structure = {
+            'info': coco_data.get('info', {}),
+            'licenses': coco_data.get('licenses', []),
+            'categories': coco_data['categories']
+        }
+        
+        split_data = {}
+        
+        for split_name, video_ids in splits.items():
+            split_annotations = []
+            split_images = []
+            image_id_mapping = {}  # old_id -> new_id
+            
+            new_ann_id = 1
+            new_img_id = 1
+            
+            # Collect all annotations for this split
+            for video_id in video_ids:
+                for ann in video_annotations[video_id]:
+                    # Map image if not already mapped
+                    old_image_id = ann['image_id']
+                    if old_image_id not in image_id_mapping:
+                        # Find original image info
+                        original_img = next(img for img in coco_data['images'] 
+                                          if img['id'] == old_image_id)
+                        
+                        # Create new image entry
+                        new_img = original_img.copy()
+                        new_img['id'] = new_img_id
+                        split_images.append(new_img)
+                        
+                        image_id_mapping[old_image_id] = new_img_id
+                        new_img_id += 1
+                    
+                    # Create new annotation
+                    new_ann = ann.copy()
+                    new_ann['id'] = new_ann_id
+                    new_ann['image_id'] = image_id_mapping[old_image_id]
+                    split_annotations.append(new_ann)
+                    new_ann_id += 1
+            
+            # Create split dataset
+            split_data[split_name] = {
+                **base_structure,
+                'images': split_images,
+                'annotations': split_annotations
+            }
+            
+            print(f"  {split_name}: {len(split_images)} images, {len(split_annotations)} annotations")
+        
+        return split_data
+    
+    def crop_and_organize_images(self, split_data):
+        """Crop bboxes and organize into classification dataset structure"""
+        print(f"\n=== CROPPING AND ORGANIZING IMAGES ===")
+        
+        # Create output directory structure
+        os.makedirs(self.output_dir, exist_ok=True)
+        
+        # Get category info
+        categories = {cat['id']: cat['name'] for cat in split_data['train']['categories']}
+        
+        total_cropped = 0
+        split_stats = {}
+        
+        for split_name, data in split_data.items():
+            print(f"\nProcessing {split_name} split...")
+            
+            split_dir = os.path.join(self.output_dir, split_name)
+            os.makedirs(split_dir, exist_ok=True)
+            
+            # Create category directories
+            for cat_name in categories.values():
+                if cat_name.lower() != 'animal':  # Skip 'Animal' category
+                    os.makedirs(os.path.join(split_dir, cat_name), exist_ok=True)
+            
+            # Process annotations
+            category_counts = Counter()
+            
+            for ann in data['annotations']:
+                try:
+                    # Skip 'Animal' category
+                    if categories[ann['category_id']].lower() == 'animal':
+                        continue
+                    
+                    # Find corresponding image
+                    image_info = next(img for img in data['images'] 
+                                    if img['id'] == ann['image_id'])
+                    
+                    # Load original image
+                    image_path = os.path.join(self.images_dir, image_info['file_name'])
+                    if not os.path.exists(image_path):
+                        print(f"    Warning: Image not found: {image_path}")
+                        continue
+                    
+                    image = Image.open(image_path).convert('RGB')
+                    
+                    # Extract bbox
+                    bbox = ann['bbox']  # [x, y, width, height]
+                    x, y, w, h = bbox
+                    
+                    # Crop image
+                    crop = image.crop((x, y, x + w, y + h))
+                    
+                    # Save crop
+                    category_name = categories[ann['category_id']]
+                    crop_filename = f"{ann['id']}.jpg"
+                    crop_path = os.path.join(split_dir, category_name, crop_filename)
+                    crop.save(crop_path)
+                    
+                    category_counts[category_name] += 1
+                    total_cropped += 1
+                    
+                except Exception as e:
+                    print(f"    Error processing annotation {ann['id']}: {e}")
+                    continue
+            
+            # Store split stats
+            split_stats[split_name] = dict(category_counts)
+            
+            print(f"  {split_name} completed: {sum(category_counts.values())} crops")
+            for cat_name, count in category_counts.items():
+                print(f"    {cat_name}: {count}")
+        
+        print(f"\nTotal cropped images: {total_cropped}")
+        
+        return split_stats
+    
+    def run_video_aware_split(self):
+        """Run the complete video-aware splitting process"""
+        print(f"Starting video-aware dataset splitting...")
+        print(f"Input COCO file: {self.coco_file}")
+        print(f"Input images: {self.images_dir}")
+        print(f"Output directory: {self.output_dir}")
+        
+        # Load COCO data
+        print(f"\n=== LOADING COCO DATA ===")
+        with open(self.coco_file, 'r') as f:
+            coco_data = json.load(f)
+        
+        print(f"Loaded {len(coco_data['images'])} images, {len(coco_data['annotations'])} annotations")
+        
+        # Analyze video distribution
+        video_annotations, video_images, video_stats = self.analyze_video_distribution(coco_data)
+        
+        # Create stratified splits
+        categories = {cat['id']: cat['name'] for cat in coco_data['categories']}
+        splits = self.create_stratified_splits(video_stats, categories)
+        
+        # Create split annotations
+        split_data = self.create_split_annotations(video_annotations, splits, coco_data)
+        
+        # Save split annotation files
+        annotations_dir = os.path.join(self.output_dir, 'annotations')
+        os.makedirs(annotations_dir, exist_ok=True)
+        
+        for split_name, data in split_data.items():
+            output_file = os.path.join(annotations_dir, f'{split_name}_annotations.json')
+            with open(output_file, 'w') as f:
+                json.dump(data, f, indent=2)
+            print(f"Saved {split_name} annotations to {output_file}")
+        
+        # Crop and organize images
+        split_stats = self.crop_and_organize_images(split_data)
+        
+        # Create summary
+        self.create_summary_report(split_stats, video_stats, len(coco_data['annotations']))
+        
+        return split_stats
+    
+    def create_summary_report(self, split_stats, video_stats, original_annotations):
+        """Create summary report of the splitting process"""
+        summary = {
+            'original_dataset': {
+                'total_annotations': original_annotations,
+                'total_videos': len(video_stats)
+            },
+            'new_dataset': {
+                'output_directory': self.output_dir,
+                'split_ratios': {
+                    'train': self.train_ratio,
+                    'val': self.val_ratio, 
+                    'test': self.test_ratio
+                },
+                'splits': split_stats
+            },
+            'improvements': [
+                "Eliminated temporal data leakage",
+                "Proper video-aware train/test separation", 
+                "Stratified splitting by category",
+                "Ready for realistic evaluation"
+            ]
+        }
+        
+        # Save summary
+        summary_path = os.path.join(self.output_dir, 'split_summary.json')
+        with open(summary_path, 'w') as f:
+            json.dump(summary, f, indent=2)
+        
+        print(f"\n=== SUMMARY ===")
+        print(f"Video-aware dataset created: {self.output_dir}")
+        print(f"Original: {original_annotations} annotations from {len(video_stats)} videos")
+        print(f"New dataset:")
+        
+        total_new = 0
+        for split_name, stats in split_stats.items():
+            split_total = sum(stats.values())
+            total_new += split_total
+            print(f"  {split_name}: {split_total} samples")
+        
+        print(f"Total: {total_new} samples (excluded 'Animal' category)")
+        print(f"Ready for training: python src/train_classifier.py --data_dir {self.output_dir}")
+        print(f"Expected accuracy drop: ~15-20% (but now it's REAL performance!)")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Create video-aware train/test splits to eliminate temporal data leakage')
+    parser.add_argument('--coco_file', 
+                        default='~/datasets/wildlife_coco_dataset/annotations.json',
+                        help='Path to COCO annotations file')
+    parser.add_argument('--images_dir', 
+                        default='~/datasets/wildlife_coco_dataset/images',
+                        help='Path to images directory')
+    parser.add_argument('--output_dir', 
+                        default='~/datasets/wildlife_classification_video_aware',
+                        help='Output directory for video-aware dataset')
+    parser.add_argument('--train_ratio', type=float, default=0.7,
+                        help='Proportion for training set')
+    parser.add_argument('--val_ratio', type=float, default=0.2, 
+                        help='Proportion for validation set')
+    parser.add_argument('--test_ratio', type=float, default=0.1,
+                        help='Proportion for test set')
+    parser.add_argument('--seed', type=int, default=42,
+                        help='Random seed for reproducible splits')
+    
+    args = parser.parse_args()
+    
+    # Expand paths
+    args.coco_file = os.path.expanduser(args.coco_file)
+    args.images_dir = os.path.expanduser(args.images_dir)
+    args.output_dir = os.path.expanduser(args.output_dir)
+    
+    # Set random seed
+    random.seed(args.seed)
+    
+    # Verify inputs
+    if not os.path.exists(args.coco_file):
+        print(f"COCO file not found: {args.coco_file}")
+        return
+        
+    if not os.path.exists(args.images_dir):
+        print(f"Images directory not found: {args.images_dir}")
+        return
+    
+    # Create splitter and run
+    splitter = VideoAwareDatasetSplitter(
+        coco_file=args.coco_file,
+        images_dir=args.images_dir,
+        output_dir=args.output_dir,
+        train_ratio=args.train_ratio,
+        val_ratio=args.val_ratio,
+        test_ratio=args.test_ratio
+    )
+    
+    split_stats = splitter.run_video_aware_split()
+    
+    print(f"\nNext steps:")
+    print(f"1. Train new model: python src/train_classifier.py --data_dir {args.output_dir}")
+    print(f"2. Evaluate performance: python src/evaluate_classifier.py --model_path [new_model] --data_dir {args.output_dir}")
+    print(f"3. Compare with old results (expect 15-20% accuracy drop, but it's REAL!)")
+
+
+if __name__ == "__main__":
+    main()
