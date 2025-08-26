@@ -290,7 +290,7 @@ class ClassifierEvaluator:
             class_confidences = confidences[predicted_classes == i]
             confidence_by_class.append(class_confidences)
         
-        plt.boxplot(confidence_by_class, labels=self.class_names)
+        plt.boxplot(confidence_by_class, tick_labels=self.class_names)
         plt.title('Confidence Distribution by Predicted Class')
         plt.xlabel('Class')
         plt.ylabel('Confidence Score')
@@ -377,6 +377,30 @@ class ClassifierEvaluator:
         """Create comprehensive evaluation report"""
         print(f"\n=== CREATING COMPREHENSIVE REPORT ===")
         
+        # Convert numpy/pandas types to native Python types for JSON serialization
+        def convert_to_python_types(obj):
+            if hasattr(obj, 'item'):  # numpy scalars
+                return obj.item()
+            elif hasattr(obj, 'tolist'):  # numpy arrays
+                return obj.tolist()
+            elif isinstance(obj, dict):
+                return {k: convert_to_python_types(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_to_python_types(v) for v in obj]
+            else:
+                return obj
+        
+        # Convert metrics DataFrame to serializable format
+        per_class_metrics = []
+        for _, row in metrics_df.iterrows():
+            per_class_metrics.append({
+                'class': row['Class'],
+                'precision': float(row['Precision']),
+                'recall': float(row['Recall']),
+                'f1_score': float(row['F1-Score']),
+                'support': int(row['Support'])
+            })
+        
         report = {
             'model_info': {
                 'backbone': self.backbone,
@@ -389,8 +413,8 @@ class ClassifierEvaluator:
             },
             'performance': {
                 'overall_accuracy': float(results['accuracy']),
-                'per_class_metrics': metrics_df.to_dict('records'),
-                'confidence_stats': confidence_stats
+                'per_class_metrics': per_class_metrics,
+                'confidence_stats': convert_to_python_types(confidence_stats)
             },
             'recommendations': self.generate_recommendations(results, metrics_df)
         }
