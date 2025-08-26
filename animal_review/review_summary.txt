@@ -1,0 +1,28 @@
+Animal Review Summary
+===================
+Total images with only 'Animal' annotations: 346
+Successfully processed: 346
+Total 'Animal' bboxes: 496
+
+Image IDs processed:
+  251893353
+  624354548
+  381769632
+  642314355
+  534949631
+  972961849
+  784314950
+  676020293
+  723555661
+  420630723
+  77764915
+  897535480
+  821933320
+  529544055
+  562266075
+  173746733
+  440040407
+  792042255
+  899102928
+  268316429
+  ... and 326 more
