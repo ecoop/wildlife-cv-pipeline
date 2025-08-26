@@ -100,13 +100,15 @@ class ClassifierTrainer:
             replacement=True
         )
         
+        pin_memory = self.device.type != 'mps' # turn off pin memory for Apple Silicon MPS
+
         # Create data loaders
         self.train_loader = DataLoader(
             train_dataset,
             batch_size=self.batch_size,
             sampler=sampler,
             num_workers=2,
-            pin_memory=True
+            pin_memory=pin_memory
         )
         
         self.val_loader = DataLoader(
