@@ -314,7 +314,7 @@ class ClassifierEvaluator:
         incorrect_mask = results['predictions'] != results['targets']
         
         if not np.any(incorrect_mask):
-            print("🎉 Perfect accuracy! No misclassified examples.")
+            print("Perfect accuracy! No misclassified examples.")
             return
         
         # Get confidence scores for incorrect predictions
@@ -324,12 +324,17 @@ class ClassifierEvaluator:
         # Sort by confidence (highest confidence wrong predictions are most interesting)
         sorted_indices = np.argsort(-incorrect_confidences)
         
+        # Collect misclassification details
+        misclassification_details = []
+        
         # Create figure for top misclassifications
         fig, axes = plt.subplots(2, min(num_examples, 5), figsize=(15, 8))
         fig.suptitle('Most Confident Misclassifications', fontsize=16)
         
         if axes.ndim == 1:  # Handle case with only one row
             axes = axes.reshape(1, -1)
+        
+        print(f"Top {min(num_examples, len(sorted_indices))} misclassifications:")
         
         for i in range(min(num_examples, len(sorted_indices), 10)):
             if i >= axes.shape[1]:
@@ -338,24 +343,51 @@ class ClassifierEvaluator:
             # Get the actual index in the full results
             result_idx = incorrect_indices[sorted_indices[i]]
             
-            # Load and display image
+            # Get prediction details
             img_path = results['image_paths'][result_idx]
-            img = Image.open(img_path).convert('RGB')
+            true_class = self.class_names[results['targets'][result_idx]]
+            pred_class = self.class_names[results['predictions'][result_idx]]
+            confidence = incorrect_confidences[sorted_indices[i]]
             
-            row = i // axes.shape[1] if i < 10 else 1
-            col = i % axes.shape[1]
+            # Store details
+            details = {
+                'rank': i + 1,
+                'image_path': img_path,
+                'true_class': true_class,
+                'predicted_class': pred_class,
+                'confidence': float(confidence),
+                'top_predictions': []
+            }
             
-            if row < axes.shape[0]:
-                axes[row, col].imshow(img)
+            # Add top 3 predictions for context
+            probs = results['probabilities'][result_idx]
+            top_indices = np.argsort(probs)[-3:][::-1]
+            for idx in top_indices:
+                details['top_predictions'].append({
+                    'class': self.class_names[idx],
+                    'confidence': float(probs[idx])
+                })
+            
+            misclassification_details.append(details)
+            
+            # Print details
+            print(f"  {i+1}. Image: {img_path}")
+            print(f"     True: {true_class} → Predicted: {pred_class} (conf: {confidence:.3f})")
+            
+            # Load and display image
+            try:
+                img = Image.open(img_path).convert('RGB')
                 
-                # Get prediction info
-                true_class = self.class_names[results['targets'][result_idx]]
-                pred_class = self.class_names[results['predictions'][result_idx]]
-                confidence = incorrect_confidences[sorted_indices[i]]
+                row = i // axes.shape[1] if i < 10 else 1
+                col = i % axes.shape[1]
                 
-                axes[row, col].set_title(f'True: {true_class}\nPred: {pred_class}\nConf: {confidence:.3f}', 
-                                       fontsize=10)
-                axes[row, col].axis('off')
+                if row < axes.shape[0]:
+                    axes[row, col].imshow(img)
+                    axes[row, col].set_title(f'True: {true_class}\nPred: {pred_class}\nConf: {confidence:.3f}', 
+                                        fontsize=10)
+                    axes[row, col].axis('off')
+            except Exception as e:
+                print(f"     Error loading image: {e}")
         
         # Hide empty subplots
         for i in range(num_examples, axes.shape[0] * axes.shape[1]):
@@ -369,10 +401,15 @@ class ClassifierEvaluator:
         plt.savefig(os.path.join(self.results_dir, 'misclassified_examples.png'), dpi=300, bbox_inches='tight')
         plt.show()
         
-        # Print summary of misclassifications
+        # Save detailed misclassification information
+        misclass_path = os.path.join(self.results_dir, 'misclassifications.json')
+        with open(misclass_path, 'w') as f:
+            json.dump(misclassification_details, f, indent=2)
+        
+        print(f"\nDetailed misclassification info saved to: {misclass_path}")
         print(f"Total misclassifications: {np.sum(incorrect_mask)}")
         print(f"Misclassification rate: {np.mean(incorrect_mask):.3f}")
-        
+
     def create_comprehensive_report(self, results, metrics_df, confidence_stats):
         """Create comprehensive evaluation report"""
         print(f"\n=== CREATING COMPREHENSIVE REPORT ===")
