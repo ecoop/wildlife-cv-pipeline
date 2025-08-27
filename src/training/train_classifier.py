@@ -139,7 +139,7 @@ class ClassifierTrainer:
         self.criterion = nn.CrossEntropyLoss()
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, mode='max', factor=0.5, patience=5, verbose=True
+            self.optimizer, mode='max', factor=0.5, patience=5
         )
         
         # Count parameters
