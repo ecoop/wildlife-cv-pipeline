@@ -1,6 +1,7 @@
 # Credentials & API keys
 *.env
 config/credentials.json
+config/cameras.yaml
 
 # Data outputs
 exported_data/

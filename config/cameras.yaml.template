@@ -1,0 +1,20 @@
+output_dir: recordings
+fps: 5
+
+detection:
+  confidence_threshold: 0.2
+  sampling_rate: 10
+  timeout: 2.0
+  device: CPU
+  batch_size: 1
+
+cameras:
+  - name: west_alley
+    rtsp_url: rtsp://USERNAME:PASSWORD@192.168.1.140/stream1
+    
+  - name: east_fence
+    rtsp_url: rtsp://USERNAME:PASSWORD@192.168.1.179/stream1
+    
+  - name: west_fence
+    rtsp_url: rtsp://USERNAME:PASSWORD@192.168.1.182/stream1
+    enabled: false
