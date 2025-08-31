@@ -3,3 +3,5 @@ requests
 Pillow
 tqdm
 python-dotenv
+opencv-python
+PyYAML
