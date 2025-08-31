@@ -90,6 +90,7 @@ class WildlifeDetector:
         # TODO: Load actual detection model (YOLOv8, etc.)
         self.logger = logging.getLogger(__name__)
         self.logger.info(f"Loading detection model from: {model_path}")
+        self.logger.warning("Using PLACEHOLDER detector - replace with actual model!")
         
     def detect(self, frame: np.ndarray, confidence_threshold: float = 0.5) -> list:
         """
@@ -103,9 +104,10 @@ class WildlifeDetector:
         
         if random.random() < 0.15:  # 15% chance of detection for testing
             h, w = frame.shape[:2]
+            confidence = random.uniform(0.4, 0.95)
             return [Detection(
                 timestamp=time.time(),
-                confidence=random.uniform(0.4, 0.95),
+                confidence=confidence,
                 bbox=(random.randint(0, w//2), random.randint(0, h//2), 
                       random.randint(50, 200), random.randint(50, 200)),
                 class_name=random.choice(['mammal', 'bird', 'unknown']),
@@ -137,6 +139,7 @@ class CameraMonitor:
         self.recording = False
         self.recording_start_time = None
         self.last_detection_time = None
+        self.recording_detections = []  # Store detections during recording
         
         # Threading
         self.running = False
@@ -226,6 +229,7 @@ class CameraMonitor:
                 # Add camera name to detections
                 for detection in detections:
                     detection.camera_name = self.camera_config.name
+                    detection.timestamp = timestamp  # Ensure consistent timestamp
                 
                 # Process detections
                 if detections:
@@ -246,8 +250,19 @@ class CameraMonitor:
         """Handle detected animals"""
         for detection in detections:
             self.logger.info(f"Detection: {detection.class_name} "
-                           f"(conf: {detection.confidence:.2f}) "
-                           f"at {detection.bbox}")
+                           f"(confidence: {detection.confidence:.3f}) "
+                           f"bbox: {detection.bbox}")
+            
+            # Store detections during recording
+            if self.recording:
+                detection_dict = {
+                    'timestamp': detection.timestamp,
+                    'confidence': detection.confidence,
+                    'bbox': detection.bbox,
+                    'class_name': detection.class_name,
+                    'camera_name': detection.camera_name
+                }
+                self.recording_detections.append(detection_dict)
         
         if self.should_start_recording():
             self.start_recording(timestamp)
@@ -273,6 +288,7 @@ class CameraMonitor:
         self.logger.info("Starting recording")
         self.recording = True
         self.recording_start_time = detection_timestamp
+        self.recording_detections = []  # Reset detection storage
         
         # Get pre-buffer frames
         buffer_start_time = detection_timestamp - self.detection_config.buffer_before_seconds
@@ -295,40 +311,139 @@ class CameraMonitor:
         if not self.recording:
             return
             
-        self.logger.info("Stopping recording")
+        self.logger.info(f"Stopping recording ({len(self.recording_detections)} detections captured)")
         self.recording = False
         self.recording_start_time = None
         
+    def draw_detections(self, frame: np.ndarray, detections: list, frame_timestamp: float) -> np.ndarray:
+        """Draw bounding boxes and labels on frame"""
+        if not detections:
+            return frame
+            
+        annotated_frame = frame.copy()
+        
+        # Find detections for this timestamp (within 0.5 seconds)
+        frame_detections = [d for d in detections 
+                          if abs(d['timestamp'] - frame_timestamp) < 0.5]
+        
+        for detection in frame_detections:
+            x, y, w, h = detection['bbox']
+            confidence = detection['confidence']
+            class_name = detection['class_name']
+            
+            # Convert to integers
+            x, y, w, h = int(x), int(y), int(w), int(h)
+            
+            # Draw bounding box (green)
+            cv2.rectangle(annotated_frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+            
+            # Create label with confidence
+            label = f"{class_name}: {confidence:.2f}"
+            
+            # Get text size for background rectangle
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 0.6
+            font_thickness = 2
+            (text_width, text_height), baseline = cv2.getTextSize(label, font, font_scale, font_thickness)
+            
+            # Draw label background (green)
+            label_y = y - 10 if y - 10 > text_height else y + h + text_height + 10
+            cv2.rectangle(annotated_frame, 
+                         (x, label_y - text_height - baseline), 
+                         (x + text_width, label_y + baseline), 
+                         (0, 255, 0), -1)
+            
+            # Draw label text (black)
+            cv2.putText(annotated_frame, label, (x, label_y - baseline), 
+                       font, font_scale, (0, 0, 0), font_thickness)
+        
+        return annotated_frame
+        
     def save_clip_async(self, initial_frames: list, start_timestamp: float):
-        """Save video clip in background"""
+        """Save video clip with real-time annotation overlay"""
         def save_clip():
             timestamp_str = time.strftime("%Y%m%d_%H%M%S", time.localtime(start_timestamp))
-            output_path = Path(self.system_config.output_dir) / f"{self.camera_config.name}_{timestamp_str}.mp4"
             
-            if initial_frames:
-                h, w = initial_frames[0][0].shape[:2]
-                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                out = cv2.VideoWriter(str(output_path), fourcc, self.detection_fps, (w, h))
-                
-                # Write initial frames
-                for frame, _ in initial_frames:
-                    out.write(frame)
-                
-                # Continue writing while recording
-                last_frame_time = start_timestamp
-                while self.recording:
-                    new_frames = self.frame_buffer.get_frames_since(last_frame_time)
-                    for frame, frame_timestamp in new_frames:
-                        if frame_timestamp > last_frame_time:
-                            out.write(frame)
-                            last_frame_time = frame_timestamp
-                    time.sleep(0.1)
-                
-                out.release()
-                self.logger.info(f"Saved: {output_path}")
+            # File paths
+            video_path = Path(self.system_config.output_dir) / f"{self.camera_config.name}_{timestamp_str}.mp4"
+            metadata_path = Path(self.system_config.output_dir) / f"{self.camera_config.name}_{timestamp_str}_detections.json"
+            
+            try:
+                if initial_frames:
+                    h, w = initial_frames[0][0].shape[:2]
+                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                    out = cv2.VideoWriter(str(video_path), fourcc, self.detection_fps, (w, h))
+                    
+                    # Write initial frames with annotations
+                    for frame, frame_timestamp in initial_frames:
+                        annotated_frame = self.draw_detections(frame, self.recording_detections, frame_timestamp)
+                        out.write(annotated_frame)
+                    
+                    # Continue writing frames while recording
+                    last_frame_time = start_timestamp
+                    while self.recording:
+                        new_frames = self.frame_buffer.get_frames_since(last_frame_time)
+                        for frame, frame_timestamp in new_frames:
+                            if frame_timestamp > last_frame_time:
+                                annotated_frame = self.draw_detections(frame, self.recording_detections, frame_timestamp)
+                                out.write(annotated_frame)
+                                last_frame_time = frame_timestamp
+                        time.sleep(0.1)
+                    
+                    out.release()
+                    
+                    # Save detection metadata
+                    metadata = {
+                        'camera_name': self.camera_config.name,
+                        'start_timestamp': start_timestamp,
+                        'end_timestamp': time.time(),
+                        'total_detections': len(self.recording_detections),
+                        'detections': self.recording_detections,
+                        'detection_summary': self._create_detection_summary()
+                    }
+                    
+                    with open(metadata_path, 'w') as f:
+                        json.dump(metadata, f, indent=2)
+                    
+                    self.logger.info(f"Saved video: {video_path}")
+                    self.logger.info(f"Saved metadata: {metadata_path}")
+                    
+            except Exception as e:
+                self.logger.error(f"Error saving clip: {e}")
         
         save_thread = threading.Thread(target=save_clip, daemon=True)
         save_thread.start()
+        
+    def _create_detection_summary(self) -> dict:
+        """Create summary of detections in this recording"""
+        if not self.recording_detections:
+            return {}
+        
+        # Count by class
+        class_counts = {}
+        confidence_by_class = {}
+        
+        for detection in self.recording_detections:
+            class_name = detection['class_name']
+            confidence = detection['confidence']
+            
+            if class_name not in class_counts:
+                class_counts[class_name] = 0
+                confidence_by_class[class_name] = []
+            
+            class_counts[class_name] += 1
+            confidence_by_class[class_name].append(confidence)
+        
+        # Calculate average confidence by class
+        avg_confidence_by_class = {}
+        for class_name, confidences in confidence_by_class.items():
+            avg_confidence_by_class[class_name] = sum(confidences) / len(confidences)
+        
+        return {
+            'class_counts': class_counts,
+            'average_confidence_by_class': avg_confidence_by_class,
+            'total_detections': len(self.recording_detections)
+        }
         
     def start(self):
         """Start monitoring this camera"""
@@ -418,7 +533,6 @@ class MultiCameraWildlifeSystem:
         self.logger.info(f"Detection FPS: {self.system_config.fps / self.detection_config.sampling_rate:.1f} "
                         f"(camera {self.system_config.fps} fps / sampling rate {self.detection_config.sampling_rate})")
         
-        
     def start(self):
         """Start all camera monitors"""
         self.logger.info("Starting multi-camera wildlife monitoring system")
@@ -460,7 +574,8 @@ class MultiCameraWildlifeSystem:
                 'enabled': monitor.camera_config.enabled,
                 'running': monitor.running,
                 'recording': monitor.recording,
-                'queue_size': monitor.frame_queue.qsize()
+                'queue_size': monitor.frame_queue.qsize(),
+                'total_detections_this_recording': len(monitor.recording_detections) if monitor.recording else 0
             }
             status['cameras'][name] = camera_status
             
@@ -473,8 +588,8 @@ class MultiCameraWildlifeSystem:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Multi-Camera Wildlife Detection System')
-    parser.add_argument('--config', default='cameras.yaml', help='YAML config file path')
+    parser = argparse.ArgumentParser(description='Multi-Camera Wildlife Detection System with Real-time Annotation')
+    parser.add_argument('--config', default='config/cameras.yaml', help='YAML config file path')
     parser.add_argument('--log_level', default='INFO', help='Logging level')
     
     args = parser.parse_args()
@@ -489,12 +604,17 @@ def main():
         print(f"Config file not found: {args.config}")
         print("Create a YAML config file like:")
         print("""
+output_dir: recordings
+fps: 5
+
 detection:
-  confidence_threshold: 0.55
-  detection_fps: 2.0
+  confidence_threshold: 0.2
+  sampling_rate: 10
+  timeout: 2.0
+  device: CPU
+  batch_size: 1
   buffer_before_seconds: 5.0
   buffer_after_seconds: 20.0
-  output_directory: "wildlife_clips"
 
 cameras:
   - name: west_alley
@@ -514,9 +634,14 @@ cameras:
         while True:
             time.sleep(30)  # Status every 30 seconds
             status = system.get_system_status()
+            total_recording_detections = sum(
+                cam['total_detections_this_recording'] 
+                for cam in status['cameras'].values()
+            )
             logging.getLogger("Status").info(
                 f"Active: {status['active_cameras']}, "
-                f"Recording: {status['recording_cameras']} cameras"
+                f"Recording: {status['recording_cameras']} cameras, "
+                f"Current recording detections: {total_recording_detections}"
             )
         
     except KeyboardInterrupt:
