@@ -183,6 +183,7 @@ def main():
     # Expand paths
     args.coco_annotations = os.path.expanduser(args.coco_annotations)
     args.images_dir = os.path.expanduser(args.images_dir)
+    args.output_dir = os.path.expanduser(args.output_dir)
     
     # Verify inputs
     if not os.path.exists(args.coco_annotations):
