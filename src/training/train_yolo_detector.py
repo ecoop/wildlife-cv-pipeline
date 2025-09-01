@@ -14,9 +14,9 @@ def create_yolo_config(coco_annotations_path, images_dir, output_dir):
     with open(coco_annotations_path, 'r') as f:
         coco_data = json.load(f)
     
-    # Get categories (exclude 'Animal' if present)
+    # Map all animal categories to single 'animal' class
     categories = [cat for cat in coco_data['categories'] if cat['name'].lower() != 'animal']
-    class_names = [cat['name'] for cat in categories]
+    class_names = ['animal']  # Single generic class
     
     # Create YOLO dataset config
     dataset_config = {
@@ -54,13 +54,13 @@ def convert_coco_to_yolo_structure(coco_annotations_path, source_images_dir, out
     images_dir.mkdir(parents=True, exist_ok=True)
     labels_dir.mkdir(parents=True, exist_ok=True)
     
-    # Create category mapping (exclude 'Animal')
+    # Create category mapping - all animals map to single class (exclude 'Animal')
     categories = {cat['id']: cat for cat in coco_data['categories'] if cat['name'].lower() != 'animal'}
-    category_id_to_yolo_id = {cat_id: i for i, cat_id in enumerate(categories.keys())}
+    category_id_to_yolo_id = {cat_id: 0 for cat_id in categories.keys()}  # All map to class 0 (animal)
     
-    print(f"Category mapping:")
-    for cat_id, yolo_id in category_id_to_yolo_id.items():
-        print(f"  {categories[cat_id]['name']}: COCO ID {cat_id} -> YOLO ID {yolo_id}")
+    print(f"Category mapping (all species -> animal):")
+    for cat_id in categories.keys():
+        print(f"  {categories[cat_id]['name']}: COCO ID {cat_id} -> YOLO ID 0 (animal)")
     
     # Group annotations by image
     annotations_by_image = {}
