@@ -151,6 +151,7 @@ def train_yolo_detector(dataset_config_path, model_size='n', epochs=100):
         imgsz=640,
         batch=8,     # Smaller batch size for stability
         lr0=0.0001,  # Much lower learning rate to prevent NaN
+        optimizer='SGD',  # Force SGD to respect lr0 setting
         name=f'wildlife_detector_yolov8{model_size}',
         device='mps' if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() else 'cpu'
     )
