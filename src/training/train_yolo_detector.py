@@ -150,6 +150,7 @@ def train_yolo_detector(dataset_config_path, model_size='n', epochs=100):
         epochs=epochs,
         imgsz=640,
         batch=16,
+        lr0=0.001,  # Lower learning rate (default is 0.01)
         name=f'wildlife_detector_yolov8{model_size}',
         device='mps' if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() else 'cpu'
     )
