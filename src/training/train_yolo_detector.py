@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from ultralytics import YOLO
 import argparse
+import torch
 
 
 def create_yolo_config(coco_annotations_path, images_dir, output_dir):
@@ -166,7 +167,7 @@ def main():
                         default='~/datasets/wildlife_coco_dataset/images', 
                         help='Path to images directory')
     parser.add_argument('--output_dir',
-                        default='yolo_wildlife_dataset',
+                        default='~/datasets/yolo_wildlife_dataset',
                         help='Output directory for YOLO dataset')
     parser.add_argument('--model_size', default='n', choices=['n', 's', 'm', 'l', 'x'],
                         help='YOLOv8 model size (n=nano, s=small, m=medium, l=large, x=xlarge)')

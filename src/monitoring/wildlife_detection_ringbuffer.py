@@ -21,6 +21,7 @@ class DetectionConfig:
     timeout: float = 2.0
     device: str = "CPU"
     batch_size: int = 1
+    model_path: Optional[str] = None  # Path to YOLO model file
     # Ring buffer specific settings
     buffer_before_seconds: float = 5.0
     buffer_after_seconds: float = 20.0
@@ -83,14 +84,24 @@ class FrameBuffer:
 
 
 class WildlifeDetector:
-    """Placeholder for actual detection model"""
+    """YOLO-based wildlife detection model"""
     
     def __init__(self, model_path: Optional[str] = None):
         self.model_path = model_path
-        # TODO: Load actual detection model (YOLOv8, etc.)
+        self.model = None
         self.logger = logging.getLogger(__name__)
-        self.logger.info(f"Loading detection model from: {model_path}")
-        self.logger.warning("Using PLACEHOLDER detector - replace with actual model!")
+        
+        if model_path and Path(model_path).exists():
+            try:
+                from ultralytics import YOLO
+                self.model = YOLO(model_path)
+                self.logger.info(f"Loaded YOLO model from: {model_path}")
+            except Exception as e:
+                self.logger.error(f"Failed to load YOLO model: {e}")
+                self.logger.warning("Falling back to placeholder detector")
+        else:
+            self.logger.warning(f"Model path not found: {model_path}")
+            self.logger.warning("Using PLACEHOLDER detector - provide valid model path!")
         
     def detect(self, frame: np.ndarray, confidence_threshold: float = 0.5) -> list:
         """
@@ -99,22 +110,58 @@ class WildlifeDetector:
         Returns:
             List of Detection objects (without camera_name - added by caller)
         """
-        # PLACEHOLDER: Replace with actual model inference
-        import random
-        
-        if random.random() < 0.15:  # 15% chance of detection for testing
-            h, w = frame.shape[:2]
-            confidence = random.uniform(0.4, 0.95)
-            return [Detection(
-                timestamp=time.time(),
-                confidence=confidence,
-                bbox=(random.randint(0, w//2), random.randint(0, h//2), 
-                      random.randint(50, 200), random.randint(50, 200)),
-                class_name=random.choice(['mammal', 'bird', 'unknown']),
-                frame_number=0,
-                camera_name=""  # Will be set by caller
-            )]
-        return []
+        if self.model is not None:
+            try:
+                # Run YOLO inference
+                results = self.model(frame, verbose=False)
+                detections = []
+                
+                for result in results:
+                    if result.boxes is not None:
+                        for box in result.boxes:
+                            confidence = float(box.conf[0])
+                            if confidence >= confidence_threshold:
+                                # Get bounding box coordinates (xyxy format)
+                                xyxy = box.xyxy[0].cpu().numpy()
+                                x1, y1, x2, y2 = xyxy
+                                
+                                # Convert to (x, y, w, h) format
+                                bbox = (int(x1), int(y1), int(x2 - x1), int(y2 - y1))
+                                
+                                # Get class name
+                                class_id = int(box.cls[0])
+                                class_name = self.model.names.get(class_id, f"class_{class_id}")
+                                
+                                detections.append(Detection(
+                                    timestamp=time.time(),
+                                    confidence=confidence,
+                                    bbox=bbox,
+                                    class_name=class_name,
+                                    frame_number=0,
+                                    camera_name=""  # Will be set by caller
+                                ))
+                
+                return detections
+                
+            except Exception as e:
+                self.logger.error(f"Detection error: {e}")
+                return []
+        else:
+            # Fallback to placeholder for testing
+            import random
+            if random.random() < 0.05:  # Reduced frequency for placeholder
+                h, w = frame.shape[:2]
+                confidence = random.uniform(0.4, 0.95)
+                return [Detection(
+                    timestamp=time.time(),
+                    confidence=confidence,
+                    bbox=(random.randint(0, w//2), random.randint(0, h//2), 
+                          random.randint(50, 200), random.randint(50, 200)),
+                    class_name=random.choice(['mammal', 'bird', 'unknown']),
+                    frame_number=0,
+                    camera_name=""  # Will be set by caller
+                )]
+            return []
 
 
 class CameraMonitor:
@@ -482,7 +529,7 @@ class MultiCameraWildlifeSystem:
         self.load_config()
         
         # Initialize detector (shared across cameras)
-        self.detector = WildlifeDetector()
+        self.detector = WildlifeDetector(self.detection_config.model_path)
         
         # Create camera monitors
         self.camera_monitors: Dict[str, CameraMonitor] = {}
@@ -613,6 +660,7 @@ detection:
   timeout: 2.0
   device: CPU
   batch_size: 1
+  model_path: runs/detect/wildlife_detector_yolov8n/weights/best.pt  # Path to trained YOLO model
   buffer_before_seconds: 5.0
   buffer_after_seconds: 20.0
 
