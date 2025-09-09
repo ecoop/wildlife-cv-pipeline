@@ -300,8 +300,8 @@ class CameraMonitor:
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.system_config.resolution_height)
         
         # Set buffer size to reduce latency
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
-        
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1) # Change from 2 to 1
+
         if not cap.isOpened():
             self.logger.error("Failed to connect")
             return None
