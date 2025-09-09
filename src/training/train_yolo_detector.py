@@ -223,7 +223,7 @@ def main():
     
     print(f"\nNext steps:")
     print(f"1. Test model: yolo predict model=runs/detect/wildlife_detector_yolov8{args.model_size}/weights/best.pt source=path/to/test/images")
-    print(f"2. Update wildlife_detection_ringbuffer.py to use: runs/detect/wildlife_detector_yolov8{args.model_size}/weights/best.pt")
+    print(f"2. Update motion_cature.py to use: runs/detect/wildlife_detector_yolov8{args.model_size}/weights/best.pt")
 
 
 if __name__ == "__main__":
