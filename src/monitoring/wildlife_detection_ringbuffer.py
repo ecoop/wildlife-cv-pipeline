@@ -648,12 +648,13 @@ class MultiCameraWildlifeSystem:
         with open(self.config_path, 'r') as f:
             config = yaml.safe_load(f)
         
-        # Load system-level config
+        # Load system-level config from recording namespace
+        recording_settings = config.get('recording', {})
         system_settings = {
-            'output_dir': config.get('output_dir', 'recordings'),
-            'fps': config.get('fps', 5),
-            'resolution_width': config.get('resolution_width', 1280),
-            'resolution_height': config.get('resolution_height', 720)
+            'output_dir': recording_settings.get('output_dir', 'recordings'),
+            'fps': recording_settings.get('fps', 5),
+            'resolution_width': recording_settings.get('resolution_width', 1280),
+            'resolution_height': recording_settings.get('resolution_height', 720)
         }
         
         # Load Minio config if present
