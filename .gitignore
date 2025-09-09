@@ -41,3 +41,6 @@ Thumbs.db
 *_backup.jsonanimal_review/
 annotation_recoding/
 training_results/
+
+# Recordings (.json and .mp4)
+recordings/

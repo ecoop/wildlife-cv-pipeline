@@ -1,5 +1,15 @@
 output_dir: recordings
 fps: 5
+resolution_width: 1280
+resolution_height: 720
+
+# Minio configuration (optional - remove this section to disable Minio uploads)
+minio:
+  endpoint: localhost:9000
+  access_key: minioadmin
+  secret_key: minioadmin  
+  bucket_name: wildlife-data
+  secure: false  # Set to true for HTTPS
 
 detection:
   confidence_threshold: 0.2
@@ -7,6 +17,12 @@ detection:
   timeout: 2.0
   device: CPU
   batch_size: 1
+  model_path: runs/detect/wildlife_detector_yolov8n/weights/best.pt
+  # Ring buffer settings
+  buffer_before_seconds: 5.0
+  buffer_after_seconds: 20.0
+  persistence_detections: 2
+  persistence_frames: 5
 
 cameras:
   - name: west_alley
