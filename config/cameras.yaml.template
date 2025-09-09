@@ -10,8 +10,8 @@ minio:
   endpoint: localhost:9000
   access_key: minioadmin
   secret_key: minioadmin  
-  bucket_name: wildlife-data
   secure: false  # Set to true for HTTPS
+  environment: dev  # 'dev' or 'prod' - determines bucket names
 
 detection:
   confidence_threshold: 0.2

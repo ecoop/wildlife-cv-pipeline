@@ -40,8 +40,8 @@ class MinioConfig:
     endpoint: str = "localhost:9000"
     access_key: str = "minioadmin" 
     secret_key: str = "minioadmin"
-    bucket_name: str = "wildlife-data"
     secure: bool = False
+    environment: str = "dev"  # 'dev' or 'prod'
 
 
 @dataclass
@@ -100,7 +100,15 @@ class FrameBuffer:
 
 
 class MinioVideoUploader:
-    """Handle video and metadata uploads to Minio"""
+    """Handle video and metadata uploads to Minio with multiple buckets"""
+    
+    # Buckets for motion_capture.py to create/use
+    BUCKETS = [
+        'recordings-dev',      # Development video recordings  
+        'recordings-prod',     # Production video recordings
+        'images-dev',         # Development detection images
+        'images-prod'         # Production detection images
+    ]
     
     def __init__(self, minio_config: Optional[MinioConfig]):
         self.config = minio_config
@@ -116,23 +124,49 @@ class MinioVideoUploader:
                     secure=minio_config.secure
                 )
                 
-                # Ensure bucket exists
-                if not self.client.bucket_exists(minio_config.bucket_name):
-                    self.client.make_bucket(minio_config.bucket_name)
-                    self.logger.info(f"Created Minio bucket: {minio_config.bucket_name}")
+                # Ensure all required buckets exist
+                self._ensure_buckets_exist()
                 
                 self.logger.info(f"Connected to Minio: {minio_config.endpoint}")
             except Exception as e:
                 self.logger.error(f"Failed to connect to Minio: {e}")
                 self.client = None
     
+    def _ensure_buckets_exist(self):
+        """Create all required buckets if they don't exist"""
+        if not self.client:
+            return
+        
+        for bucket_name in self.BUCKETS:
+            try:
+                if not self.client.bucket_exists(bucket_name):
+                    self.client.make_bucket(bucket_name)
+                    self.logger.info(f"Created Minio bucket: {bucket_name}")
+            except S3Error as e:
+                self.logger.error(f"Failed to create bucket {bucket_name}: {e}")
+    
+    def _get_bucket_name(self, content_type: str) -> str:
+        """Get appropriate bucket name based on content type and environment"""
+        env = self.config.environment if self.config else "dev"
+        
+        if content_type == "recordings":
+            return f"recordings-{env}"
+        elif content_type == "images":
+            return f"images-{env}"
+        else:
+            # Fallback to recordings bucket
+            return f"recordings-{env}"
+    
     def upload_video_and_metadata(self, video_path: Path, metadata: dict, camera_name: str, start_timestamp: float):
-        """Upload video and metadata to Minio with timestamp-based structure"""
+        """Upload video and metadata to appropriate bucket with timestamp-based structure"""
         if not self.client or not self.config:
             self.logger.warning("Minio not configured, skipping upload")
             return
         
         try:
+            # Get appropriate bucket for recordings
+            bucket_name = self._get_bucket_name("recordings")
+            
             # Create timestamp-based path structure
             dt = datetime.fromtimestamp(start_timestamp)
             base_path = f"raw-video/{dt.year:04d}/{dt.month:02d}/{dt.day:02d}/{dt.hour:02d}/{dt.minute:02d}/{dt.second:02d}/{camera_name}"
@@ -146,7 +180,7 @@ class MinioVideoUploader:
             
             # Upload video file
             self.client.fput_object(
-                bucket_name=self.config.bucket_name,
+                bucket_name=bucket_name,
                 object_name=video_object_path,
                 file_path=str(video_path),
                 content_type='video/mp4'
@@ -155,14 +189,14 @@ class MinioVideoUploader:
             # Upload metadata as JSON
             metadata_json = json.dumps(metadata, indent=2)
             self.client.put_object(
-                bucket_name=self.config.bucket_name,
+                bucket_name=bucket_name,
                 object_name=metadata_object_path,
                 data=metadata_json.encode('utf-8'),
                 length=len(metadata_json.encode('utf-8')),
                 content_type='application/json'
             )
             
-            self.logger.info(f"Uploaded to Minio: {video_object_path}")
+            self.logger.info(f"Uploaded to Minio bucket '{bucket_name}': {video_object_path}")
             self.logger.info(f"Uploaded metadata: {metadata_object_path}")
             
             # Optionally remove local files after successful upload
@@ -173,6 +207,57 @@ class MinioVideoUploader:
             self.logger.error(f"Minio upload failed: {e}")
         except Exception as e:
             self.logger.error(f"Upload error: {e}")
+    
+    def upload_detection_image(self, image_frame: np.ndarray, metadata: dict, camera_name: str, timestamp: float):
+        """Upload individual detection frame to images bucket"""
+        if not self.client or not self.config:
+            self.logger.warning("Minio not configured, skipping image upload")
+            return
+        
+        try:
+            # Get appropriate bucket for images
+            bucket_name = self._get_bucket_name("images")
+            
+            # Create timestamp-based path structure
+            dt = datetime.fromtimestamp(timestamp)
+            base_path = f"detections/{dt.year:04d}/{dt.month:02d}/{dt.day:02d}/{dt.hour:02d}/{dt.minute:02d}/{dt.second:02d}/{camera_name}"
+            
+            # Image filename with timestamp
+            image_filename = f"detection-{dt.isoformat().replace(':', '-')}.jpg"
+            metadata_filename = f"detection-{dt.isoformat().replace(':', '-')}.json"
+            
+            image_object_path = f"{base_path}/{image_filename}"
+            metadata_object_path = f"{base_path}/{metadata_filename}"
+            
+            # Encode image to bytes
+            _, image_buffer = cv2.imencode('.jpg', image_frame)
+            image_bytes = image_buffer.tobytes()
+            
+            # Upload image
+            self.client.put_object(
+                bucket_name=bucket_name,
+                object_name=image_object_path,
+                data=image_bytes,
+                length=len(image_bytes),
+                content_type='image/jpeg'
+            )
+            
+            # Upload metadata
+            metadata_json = json.dumps(metadata, indent=2)
+            self.client.put_object(
+                bucket_name=bucket_name,
+                object_name=metadata_object_path,
+                data=metadata_json.encode('utf-8'),
+                length=len(metadata_json.encode('utf-8')),
+                content_type='application/json'
+            )
+            
+            self.logger.info(f"Uploaded detection image to bucket '{bucket_name}': {image_object_path}")
+            
+        except S3Error as e:
+            self.logger.error(f"Minio image upload failed: {e}")
+        except Exception as e:
+            self.logger.error(f"Image upload error: {e}")
 
 
 class WildlifeDetector:
