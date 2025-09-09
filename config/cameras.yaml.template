@@ -17,7 +17,7 @@ detection:
   confidence_threshold: 0.2
   sampling_rate: 10
   timeout: 2.0
-  device: CPU
+  device: mps  # Use 'mps' for Apple Silicon, 'cpu' for others
   batch_size: 1
   model_path: runs/detect/wildlife_detector_yolov8n/weights/best.pt
   # Ring buffer settings
