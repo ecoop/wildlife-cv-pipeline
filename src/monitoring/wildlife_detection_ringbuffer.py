@@ -11,6 +11,11 @@ from pathlib import Path
 import json
 import yaml
 import argparse
+from datetime import datetime
+from minio import Minio
+from minio.error import S3Error
+import tempfile
+import os
 
 
 @dataclass
@@ -30,6 +35,16 @@ class DetectionConfig:
 
 
 @dataclass
+class MinioConfig:
+    """Minio storage configuration"""
+    endpoint: str = "localhost:9000"
+    access_key: str = "minioadmin" 
+    secret_key: str = "minioadmin"
+    bucket_name: str = "wildlife-data"
+    secure: bool = False
+
+
+@dataclass
 class SystemConfig:
     """Overall system configuration"""
     output_dir: str = "recordings"
@@ -37,6 +52,7 @@ class SystemConfig:
     detection_fps: float = 2.0  # Processing FPS (derived from fps/sampling_rate)
     resolution_width: int = 1280
     resolution_height: int = 720
+    minio: Optional[MinioConfig] = None
 
 
 @dataclass
@@ -81,6 +97,82 @@ class FrameBuffer:
         """Get all frames in buffer"""
         with self.lock:
             return list(self.frames)
+
+
+class MinioVideoUploader:
+    """Handle video and metadata uploads to Minio"""
+    
+    def __init__(self, minio_config: Optional[MinioConfig]):
+        self.config = minio_config
+        self.client = None
+        self.logger = logging.getLogger(__name__)
+        
+        if minio_config:
+            try:
+                self.client = Minio(
+                    endpoint=minio_config.endpoint,
+                    access_key=minio_config.access_key,
+                    secret_key=minio_config.secret_key,
+                    secure=minio_config.secure
+                )
+                
+                # Ensure bucket exists
+                if not self.client.bucket_exists(minio_config.bucket_name):
+                    self.client.make_bucket(minio_config.bucket_name)
+                    self.logger.info(f"Created Minio bucket: {minio_config.bucket_name}")
+                
+                self.logger.info(f"Connected to Minio: {minio_config.endpoint}")
+            except Exception as e:
+                self.logger.error(f"Failed to connect to Minio: {e}")
+                self.client = None
+    
+    def upload_video_and_metadata(self, video_path: Path, metadata: dict, camera_name: str, start_timestamp: float):
+        """Upload video and metadata to Minio with timestamp-based structure"""
+        if not self.client or not self.config:
+            self.logger.warning("Minio not configured, skipping upload")
+            return
+        
+        try:
+            # Create timestamp-based path structure
+            dt = datetime.fromtimestamp(start_timestamp)
+            base_path = f"raw-video/{dt.year:04d}/{dt.month:02d}/{dt.day:02d}/{dt.hour:02d}/{dt.minute:02d}/{dt.second:02d}/{camera_name}"
+            
+            # Video filename with timestamp
+            video_filename = f"video-{dt.isoformat().replace(':', '-')}.mp4"
+            metadata_filename = f"detections-{dt.isoformat().replace(':', '-')}.json"
+            
+            video_object_path = f"{base_path}/{video_filename}"
+            metadata_object_path = f"{base_path}/{metadata_filename}"
+            
+            # Upload video file
+            self.client.fput_object(
+                bucket_name=self.config.bucket_name,
+                object_name=video_object_path,
+                file_path=str(video_path),
+                content_type='video/mp4'
+            )
+            
+            # Upload metadata as JSON
+            metadata_json = json.dumps(metadata, indent=2)
+            self.client.put_object(
+                bucket_name=self.config.bucket_name,
+                object_name=metadata_object_path,
+                data=metadata_json.encode('utf-8'),
+                length=len(metadata_json.encode('utf-8')),
+                content_type='application/json'
+            )
+            
+            self.logger.info(f"Uploaded to Minio: {video_object_path}")
+            self.logger.info(f"Uploaded metadata: {metadata_object_path}")
+            
+            # Optionally remove local files after successful upload
+            # video_path.unlink()
+            # (video_path.parent / f"{video_path.stem}_detections.json").unlink()
+            
+        except S3Error as e:
+            self.logger.error(f"Minio upload failed: {e}")
+        except Exception as e:
+            self.logger.error(f"Upload error: {e}")
 
 
 class WildlifeDetector:
@@ -173,6 +265,9 @@ class CameraMonitor:
         self.detection_config = detection_config
         self.detector = detector
         self.logger = logging.getLogger(f"Camera-{camera_config.name}")
+        
+        # Initialize Minio uploader
+        self.minio_uploader = MinioVideoUploader(system_config.minio)
         
         # Calculate effective detection FPS from sampling rate
         self.detection_fps = system_config.fps / detection_config.sampling_rate
@@ -455,6 +550,14 @@ class CameraMonitor:
                     self.logger.info(f"Saved video: {video_path}")
                     self.logger.info(f"Saved metadata: {metadata_path}")
                     
+                    # Upload to Minio if configured
+                    self.minio_uploader.upload_video_and_metadata(
+                        video_path=video_path,
+                        metadata=metadata,
+                        camera_name=self.camera_config.name,
+                        start_timestamp=start_timestamp
+                    )
+                    
             except Exception as e:
                 self.logger.error(f"Error saving clip: {e}")
         
@@ -552,6 +655,12 @@ class MultiCameraWildlifeSystem:
             'resolution_width': config.get('resolution_width', 1280),
             'resolution_height': config.get('resolution_height', 720)
         }
+        
+        # Load Minio config if present
+        minio_config_data = config.get('minio')
+        if minio_config_data:
+            system_settings['minio'] = MinioConfig(**minio_config_data)
+        
         self.system_config = SystemConfig(**system_settings)
         
         # Load detection config
