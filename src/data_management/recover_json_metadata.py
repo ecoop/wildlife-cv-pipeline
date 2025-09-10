@@ -2,6 +2,7 @@
 """
 Recover JSON metadata files to Minio after migration bug.
 Uploads local recordings/*.json files to correct Minio paths.
+FIXED: Handles underscores in camera names like 'east_fence'
 """
 
 import glob
@@ -24,13 +25,14 @@ def parse_local_filename(filename):
     """
     Parse local filename to extract components.
     
-    Input: recordings/west_fence_20250910_151205_detections.json
+    Input: recordings/east_fence_20250910_151205_detections.json
     Returns: camera, year, month, day, hour, minute, second
     """
     basename = Path(filename).name
     
     # Pattern: {camera}_{YYYYMMDD}_{HHMMSS}_detections.json
-    pattern = r'([^_]+)_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})_detections\.json'
+    # Use non-greedy match (.+?) to capture camera name with underscores
+    pattern = r'(.+?)_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})_detections\.json'
     match = re.match(pattern, basename)
     
     if not match:
@@ -91,7 +93,7 @@ def upload_json_file(client, bucket_name, local_path, minio_path):
         return False
 
 def main():
-    print("🔧 JSON Metadata Recovery Tool")
+    print("🔧 JSON Metadata Recovery Tool (FIXED)")
     print("=" * 50)
     
     # Connect to Minio
@@ -145,10 +147,6 @@ def main():
     if success_count > 0:
         print(f"\n🎉 JSON metadata recovery complete!")
         print(f"   Check Minio web portal - you should now see .json files alongside .mp4 files")
-        
-        print(f"\n💡 Recommendation: Enable versioning on your buckets:")
-        print(f"   mc version enable studio/recordings-dev")
-        print(f"   mc version enable studio/recordings-prod")
 
 if __name__ == "__main__":
     main()
