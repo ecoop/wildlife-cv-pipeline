@@ -194,10 +194,14 @@ class MinioVideoUploader:
             metadata_json = json.dumps(metadata, indent=2)
             metadata_bytes = metadata_json.encode('utf-8')
             
+            # Create BytesIO stream for metadata upload
+            from io import BytesIO
+            metadata_stream = BytesIO(metadata_bytes)
+            
             self.client.put_object(
                 bucket_name=bucket_name,
                 object_name=metadata_object_path,
-                data=metadata_bytes,
+                data=metadata_stream,
                 length=len(metadata_bytes),
                 content_type='application/json'
             )
@@ -635,10 +639,9 @@ class CameraMonitor:
                     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
                     out = cv2.VideoWriter(str(video_path), fourcc, self.detection_fps, (w, h))
                     
-                    # Write initial frames with annotations
+                    # Write initial frames (clean, no annotations)
                     for frame, frame_timestamp in initial_frames:
-                        annotated_frame = self.draw_detections(frame, self.recording_detections, frame_timestamp)
-                        out.write(annotated_frame)
+                        out.write(frame)
                     
                     # Continue writing frames while recording
                     last_frame_time = start_timestamp
@@ -646,8 +649,7 @@ class CameraMonitor:
                         new_frames = self.frame_buffer.get_frames_since(last_frame_time)
                         for frame, frame_timestamp in new_frames:
                             if frame_timestamp > last_frame_time:
-                                annotated_frame = self.draw_detections(frame, self.recording_detections, frame_timestamp)
-                                out.write(annotated_frame)
+                                out.write(frame)  # Write clean frame without annotations
                                 last_frame_time = frame_timestamp
                         time.sleep(0.1)
                     
