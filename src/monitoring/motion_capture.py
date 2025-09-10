@@ -178,6 +178,8 @@ class MinioVideoUploader:
             video_object_path = f"{base_path}/{video_filename}"
             metadata_object_path = f"{base_path}/{metadata_filename}"
             
+            self.logger.info(f"Uploading video: {video_path} (type: {type(video_path)})")
+            
             # Upload video file
             self.client.fput_object(
                 bucket_name=bucket_name,
@@ -186,13 +188,17 @@ class MinioVideoUploader:
                 content_type='video/mp4'
             )
             
+            self.logger.info("Video upload successful, uploading metadata...")
+            
             # Upload metadata as JSON
             metadata_json = json.dumps(metadata, indent=2)
+            metadata_bytes = metadata_json.encode('utf-8')
+            
             self.client.put_object(
                 bucket_name=bucket_name,
                 object_name=metadata_object_path,
-                data=metadata_json.encode('utf-8'),
-                length=len(metadata_json.encode('utf-8')),
+                data=metadata_bytes,
+                length=len(metadata_bytes),
                 content_type='application/json'
             )
             
@@ -258,6 +264,34 @@ class MinioVideoUploader:
             self.logger.error(f"Minio image upload failed: {e}")
         except Exception as e:
             self.logger.error(f"Image upload error: {e}")
+    
+    def test_upload(self, existing_video_path: str):
+        """Test upload with an existing video file"""
+        import time
+        
+        test_metadata = {
+            'camera_name': 'test_camera',
+            'start_timestamp': time.time(),
+            'end_timestamp': time.time(),
+            'total_detections': 2,
+            'detections': [
+                {'bbox': [100, 100, 50, 50], 'confidence': 0.85, 'class_name': 'test'},
+                {'bbox': [200, 200, 60, 60], 'confidence': 0.92, 'class_name': 'test'}
+            ]
+        }
+        
+        video_path = Path(existing_video_path)
+        if not video_path.exists():
+            self.logger.error(f"Test video not found: {video_path}")
+            return
+        
+        self.logger.info(f"Testing upload with: {video_path}")
+        self.upload_video_and_metadata(
+            video_path=video_path,
+            metadata=test_metadata,
+            camera_name='test_camera',
+            start_timestamp=time.time()
+        )
 
 
 class WildlifeDetector:
