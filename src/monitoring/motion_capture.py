@@ -167,13 +167,13 @@ class MinioVideoUploader:
             # Get appropriate bucket for recordings
             bucket_name = self._get_bucket_name("recordings")
             
-            # Create timestamp-based path structure
+            # Create new hybrid path structure: raw-video/YYYY/MM/camera/
             dt = datetime.fromtimestamp(start_timestamp)
-            base_path = f"raw-video/{dt.year:04d}/{dt.month:02d}/{dt.day:02d}/{dt.hour:02d}/{dt.minute:02d}/{dt.second:02d}/{camera_name}"
+            base_path = f"raw-video/{dt.year:04d}/{dt.month:02d}/{camera_name}"
             
-            # Video filename with timestamp
-            video_filename = f"video-{dt.isoformat().replace(':', '-')}.mp4"
-            metadata_filename = f"detections-{dt.isoformat().replace(':', '-')}.json"
+            # Clean filename format (matches local naming convention)
+            video_filename = f"video_{dt.year:04d}{dt.month:02d}{dt.day:02d}_{dt.hour:02d}{dt.minute:02d}{dt.second:02d}.mp4"
+            metadata_filename = f"detections_{dt.year:04d}{dt.month:02d}{dt.day:02d}_{dt.hour:02d}{dt.minute:02d}{dt.second:02d}.json"
             
             video_object_path = f"{base_path}/{video_filename}"
             metadata_object_path = f"{base_path}/{metadata_filename}"
@@ -228,13 +228,13 @@ class MinioVideoUploader:
             # Get appropriate bucket for images
             bucket_name = self._get_bucket_name("images")
             
-            # Create timestamp-based path structure
+            # Create new hybrid path structure for individual detection images
             dt = datetime.fromtimestamp(timestamp)
-            base_path = f"detections/{dt.year:04d}/{dt.month:02d}/{dt.day:02d}/{dt.hour:02d}/{dt.minute:02d}/{dt.second:02d}/{camera_name}"
+            base_path = f"detection-images/{dt.year:04d}/{dt.month:02d}/{camera_name}"
             
-            # Image filename with timestamp
-            image_filename = f"detection-{dt.isoformat().replace(':', '-')}.jpg"
-            metadata_filename = f"detection-{dt.isoformat().replace(':', '-')}.json"
+            # Clean filename format for individual detection images  
+            image_filename = f"detection_{dt.year:04d}{dt.month:02d}{dt.day:02d}_{dt.hour:02d}{dt.minute:02d}{dt.second:02d}.jpg"
+            metadata_filename = f"detection_{dt.year:04d}{dt.month:02d}{dt.day:02d}_{dt.hour:02d}{dt.minute:02d}{dt.second:02d}.json"
             
             image_object_path = f"{base_path}/{image_filename}"
             metadata_object_path = f"{base_path}/{metadata_filename}"
