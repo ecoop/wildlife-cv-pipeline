@@ -15,7 +15,8 @@ minio:
 
 detection:
   confidence_threshold: 0.2
-  sampling_rate: 10
+  monitor_sampling_rate: 10  # Monitoring: every 10th frame
+  capture_sampling_rate: 2  # Recording: every 2nd frame (higher rate during capture)
   timeout: 2.0
   device: mps  # Use 'mps' for Apple Silicon, 'cpu' for others
   batch_size: 1
