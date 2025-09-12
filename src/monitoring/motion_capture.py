@@ -22,7 +22,8 @@ import os
 class DetectionConfig:
     """Configuration for detection system"""
     confidence_threshold: float = 0.2
-    sampling_rate: int = 10  # Check every Nth frame
+    monitor_sampling_rate: int = 10  # Check every Nth frame during monitoring
+    capture_sampling_rate: int = 2  # Check every Nth frame during recording
     timeout: float = 2.0
     device: str = "CPU"
     batch_size: int = 1
@@ -392,8 +393,12 @@ class CameraMonitor:
         # Initialize Minio uploader
         self.minio_uploader = MinioVideoUploader(system_config.minio)
         
-        # Calculate effective detection FPS from sampling rate
-        self.detection_fps = system_config.fps / detection_config.sampling_rate
+        # Calculate effective FPS for both monitoring and recording
+        self.monitoring_fps = system_config.fps / detection_config.monitor_sampling_rate
+        self.capture_fps = system_config.fps / detection_config.capture_sampling_rate
+        
+        # Use monitoring FPS as default detection FPS for ring buffer
+        self.detection_fps = self.monitoring_fps
         
         # Ring buffer for this camera
         total_buffer_time = detection_config.buffer_before_seconds + detection_config.buffer_after_seconds
@@ -445,12 +450,22 @@ class CameraMonitor:
         if not cap:
             return
             
-        frame_interval = 1.0 / self.detection_fps
         last_capture_time = 0
+        last_recording_state = False
         
         try:
             while self.running:
                 current_time = time.time()
+                
+                # Use different frame rates for monitoring vs recording
+                current_fps = self.capture_fps if self.recording else self.monitoring_fps
+                frame_interval = 1.0 / current_fps
+                
+                # Log frame rate changes
+                if self.recording != last_recording_state:
+                    state_name = "Recording" if self.recording else "Monitoring"
+                    self.logger.info(f"Switched to {state_name} mode: {current_fps:.1f} fps")
+                    last_recording_state = self.recording
                 
                 if current_time - last_capture_time < frame_interval:
                     time.sleep(0.01)
@@ -808,8 +823,11 @@ class MultiCameraWildlifeSystem:
             self.camera_configs.append(camera_config)
         
         self.logger.info(f"Loaded config for {len(self.camera_configs)} cameras")
-        self.logger.info(f"Detection FPS: {self.system_config.fps / self.detection_config.sampling_rate:.1f} "
-                        f"(camera {self.system_config.fps} fps / sampling rate {self.detection_config.sampling_rate})")
+        monitoring_fps = self.system_config.fps / self.detection_config.monitor_sampling_rate
+        capture_fps = self.system_config.fps / self.detection_config.capture_sampling_rate
+        self.logger.info(f"Frame rates - Monitoring: {monitoring_fps:.1f} fps (every {self.detection_config.monitor_sampling_rate} frames)")
+        self.logger.info(f"Frame rates - Recording: {capture_fps:.1f} fps (every {self.detection_config.capture_sampling_rate} frames)")
+        self.logger.info(f"Base camera FPS: {self.system_config.fps}")
         
     def start(self):
         """Start all camera monitors"""
