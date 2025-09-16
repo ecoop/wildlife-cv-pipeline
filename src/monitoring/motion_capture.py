@@ -1,3 +1,27 @@
+"""
+Multi-camera wildlife monitoring system with real-time detection and recording.
+
+This module provides a comprehensive wildlife monitoring solution that connects to RTSP camera 
+streams, performs real-time animal detection using YOLO models, and automatically records 
+video clips when wildlife is detected. The system uses ring buffers to capture footage 
+before and after detection events, implements dual sampling rates for efficient monitoring 
+vs high-quality recording, and stores results both locally and in Minio object storage.
+
+Classes:
+    DetectionConfig: Configuration for detection parameters and sampling rates
+    MinioConfig: Configuration for Minio object storage connection  
+    SystemConfig: Overall system configuration including camera settings
+    CameraConfig: Individual camera configuration and connection details
+    FrameBuffer: Ring buffer implementation for pre/post detection video capture
+    WildlifeDetector: YOLO-based animal detection with configurable confidence thresholds
+    MinioVideoUploader: Handles uploading videos and metadata to Minio storage
+    CameraMonitor: Manages individual camera monitoring, detection, and recording
+    MultiCameraWildlifeSystem: Orchestrates multiple camera monitors and system lifecycle
+
+Main Functions:
+    main(): Entry point with argument parsing and system startup
+"""
+
 import cv2
 import numpy as np
 import threading
@@ -941,7 +965,8 @@ fps: 5
 
 detection:
   confidence_threshold: 0.2
-  sampling_rate: 10
+  monitor_sampling_rate: 10  # Monitoring: every 10th frame
+  capture_sampling_rate: 2   # Recording: every 2nd frame (higher rate during capture)
   timeout: 2.0
   device: CPU
   batch_size: 1
