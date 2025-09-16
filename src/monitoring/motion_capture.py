@@ -672,17 +672,18 @@ class CameraMonitor:
                     
                     # Save detection metadata
                     metadata = {
-                        'camera_name': self.camera_config.name,
-                        'start_timestamp': start_timestamp,
-                        'end_timestamp': time.time(),
-                        'total_detections': len(self.recording_detections),
-                        'frame_dimensions': {
-                            'width': w,
-                            'height': h,
-                            'full_frame_bbox': [0, 0, w, h]
+                        'video_info': {
+                            'camera_name': self.camera_config.name,
+                            'start_timestamp': start_timestamp,
+                            'end_timestamp': time.time(),
+                            'frame_dimensions': {
+                                'width': w,
+                                'height': h,
+                                'full_frame_bbox': [0, 0, w, h]
+                            }
                         },
-                        'detections': self.recording_detections,
-                        'detection_summary': self._create_detection_summary()
+                        'detection_summary': self._create_detection_summary(),
+                        'detections': self.recording_detections
                     }
                     
                     with open(metadata_path, 'w') as f:
