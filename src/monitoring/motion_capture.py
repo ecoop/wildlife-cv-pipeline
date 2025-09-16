@@ -676,6 +676,11 @@ class CameraMonitor:
                         'start_timestamp': start_timestamp,
                         'end_timestamp': time.time(),
                         'total_detections': len(self.recording_detections),
+                        'frame_dimensions': {
+                            'width': w,
+                            'height': h,
+                            'full_frame_bbox': [0, 0, w, h]
+                        },
                         'detections': self.recording_detections,
                         'detection_summary': self._create_detection_summary()
                     }
@@ -703,29 +708,59 @@ class CameraMonitor:
     def _create_detection_summary(self) -> dict:
         """Create summary of detections in this recording"""
         if not self.recording_detections:
-            return {}
+            return {
+                'max_detections_per_frame': 0,
+                'detection_distribution': {'0': 'N/A'},
+                'class_counts': {},
+                'average_confidence_by_class': {},
+                'total_detections': 0
+            }
         
         # Count by class
         class_counts = {}
         confidence_by_class = {}
         
+        # Group detections by frame timestamp for distribution analysis
+        detections_by_frame = {}
+        
         for detection in self.recording_detections:
             class_name = detection['class_name']
             confidence = detection['confidence']
+            frame_timestamp = detection.get('timestamp', detection.get('frame_timestamp', 0))
             
+            # Group by class
             if class_name not in class_counts:
                 class_counts[class_name] = 0
                 confidence_by_class[class_name] = []
             
             class_counts[class_name] += 1
             confidence_by_class[class_name].append(confidence)
+            
+            # Group by frame for distribution analysis
+            if frame_timestamp not in detections_by_frame:
+                detections_by_frame[frame_timestamp] = 0
+            detections_by_frame[frame_timestamp] += 1
         
         # Calculate average confidence by class
         avg_confidence_by_class = {}
         for class_name, confidences in confidence_by_class.items():
             avg_confidence_by_class[class_name] = sum(confidences) / len(confidences)
         
+        # Calculate detection distribution analysis
+        detection_counts = list(detections_by_frame.values())
+        max_detections_per_frame = max(detection_counts) if detection_counts else 0
+        
+        # Create distribution histogram
+        detection_distribution = {}
+        for count in detection_counts:
+            count_str = str(count)
+            if count_str not in detection_distribution:
+                detection_distribution[count_str] = 0
+            detection_distribution[count_str] += 1
+        
         return {
+            'max_detections_per_frame': max_detections_per_frame,
+            'detection_distribution': detection_distribution,
             'class_counts': class_counts,
             'average_confidence_by_class': avg_confidence_by_class,
             'total_detections': len(self.recording_detections)
