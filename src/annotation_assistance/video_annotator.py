@@ -309,7 +309,8 @@ class MinioVideoAnnotator:
             self.logger.error(f"Error uploading {minio_path}: {e}")
             return False
 
-    def process_recording(self, recording: Dict[str, str]) -> bool:
+    def process_recording(self, recording: Dict[str, str], save_local: bool = False, 
+                         upload_minio: bool = True, local_output_dir: str = "annotated_videos") -> bool:
         """Process a single video/JSON pair"""
         video_path = recording['video_path']
         json_path = recording['json_path']
@@ -320,11 +321,13 @@ class MinioVideoAnnotator:
         
         try:
             # Get source file timestamp for preservation
-            try:
-                source_stat = self.client.stat_object(self.bucket, video_path)
-                source_modified_time = source_stat.last_modified
-            except:
-                source_modified_time = None
+            source_modified_time = None
+            if upload_minio:
+                try:
+                    source_stat = self.client.stat_object(self.bucket, video_path)
+                    source_modified_time = source_stat.last_modified
+                except:
+                    pass
             
             # Download files
             video_data = self.download_file(video_path)
@@ -342,18 +345,28 @@ class MinioVideoAnnotator:
             if not self.annotate_video(video_data, detections, start_time, end_time, temp_output_path):
                 return False
             
-            # Generate output path: annotated-video/YYYY/MM/camera/annotated_YYYYMMDD_HHMMSS.mp4
+            # Generate filename and paths
             video_filename = Path(video_path).name
             annotated_filename = video_filename.replace('video_', 'annotated_')
-            
-            # Extract year/month from original path
             path_parts = video_path.split('/')
             year, month = path_parts[1], path_parts[2]
             
-            output_path = f"annotated-video/{year}/{month}/{camera}/{annotated_filename}"
+            success = True
             
-            # Upload annotated video
-            success = self.upload_annotated_video(temp_output_path, output_path, source_modified_time)
+            # Save locally if requested
+            if save_local:
+                local_dir = Path(local_output_dir) / year / month / camera
+                local_dir.mkdir(parents=True, exist_ok=True)
+                local_path = local_dir / annotated_filename
+                
+                import shutil
+                shutil.copy2(temp_output_path, local_path)
+                self.logger.info(f"Saved locally: {local_path}")
+            
+            # Upload to Minio if requested
+            if upload_minio:
+                minio_path = f"annotated-video/{year}/{month}/{camera}/{annotated_filename}"
+                success = self.upload_annotated_video(temp_output_path, minio_path, source_modified_time)
             
             # Clean up
             Path(temp_output_path).unlink(missing_ok=True)
@@ -372,8 +385,32 @@ def main():
     parser.add_argument('--date', help='Specific date YYYY-MM-DD')
     parser.add_argument('--date-range', help='Date range YYYY-MM-DD:YYYY-MM-DD')
     parser.add_argument('--log-level', default='INFO', help='Logging level')
+    parser.add_argument('--save-local', action='store_true',
+                       help='Save annotated videos to local filesystem')
+    parser.add_argument('--no-local', action='store_true',
+                       help='Skip saving to local filesystem')
+    parser.add_argument('--upload-minio', action='store_true', default=True,
+                       help='Upload annotated videos to Minio (default)')
+    parser.add_argument('--no-minio', action='store_true',
+                       help='Skip uploading to Minio')
     
     args = parser.parse_args()
+    
+    # Validate storage arguments
+    if args.save_local and args.no_local:
+        print("Error: Cannot specify both --save-local and --no-local")
+        return
+    if args.upload_minio and args.no_minio:
+        print("Error: Cannot specify both --upload-minio and --no-minio")
+        return
+    
+    # Determine storage options
+    save_local = args.save_local and not args.no_local
+    upload_minio = (args.upload_minio or not args.save_local) and not args.no_minio
+    
+    if not save_local and not upload_minio:
+        print("Error: Must save somewhere - specify --save-local or --upload-minio")
+        return
     
     # Setup logging
     logging.basicConfig(
@@ -400,7 +437,7 @@ def main():
     # Process each recording
     success_count = 0
     for recording in recordings:
-        if annotator.process_recording(recording):
+        if annotator.process_recording(recording, save_local=save_local, upload_minio=upload_minio):
             success_count += 1
     
     print(f"Successfully processed {success_count}/{len(recordings)} recordings")

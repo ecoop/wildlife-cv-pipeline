@@ -407,11 +407,13 @@ class WildlifeDetector:
 class CameraMonitor:
     """Monitor for a single camera"""
     
-    def __init__(self, camera_config: CameraConfig, system_config: SystemConfig, detection_config: DetectionConfig, detector: WildlifeDetector):
+    def __init__(self, camera_config: CameraConfig, system_config: SystemConfig, detection_config: DetectionConfig, detector: WildlifeDetector, save_local: bool = True, upload_minio: bool = True):
         self.camera_config = camera_config
         self.system_config = system_config
         self.detection_config = detection_config
         self.detector = detector
+        self.save_local = save_local
+        self.upload_minio = upload_minio
         self.logger = logging.getLogger(f"Camera-{camera_config.name}")
         
         # Initialize Minio uploader
@@ -664,13 +666,20 @@ class CameraMonitor:
         return annotated_frame
         
     def save_clip_async(self, initial_frames: list, start_timestamp: float):
-        """Save video clip with real-time annotation overlay"""
+        """Save video clip with conditional storage (local/Minio based on flags)"""
         def save_clip():
             timestamp_str = time.strftime("%Y%m%d_%H%M%S", time.localtime(start_timestamp))
             
-            # File paths
-            video_path = Path(self.system_config.output_dir) / f"{self.camera_config.name}_{timestamp_str}.mp4"
-            metadata_path = Path(self.system_config.output_dir) / f"{self.camera_config.name}_{timestamp_str}_detections.json"
+            # Determine file paths
+            if self.save_local:
+                video_path = Path(self.system_config.output_dir) / f"{self.camera_config.name}_{timestamp_str}.mp4"
+                metadata_path = Path(self.system_config.output_dir) / f"{self.camera_config.name}_{timestamp_str}_detections.json"
+            else:
+                # Use temporary files for Minio-only uploads
+                with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_video:
+                    video_path = Path(temp_video.name)
+                with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as temp_metadata:
+                    metadata_path = Path(temp_metadata.name)
             
             try:
                 if initial_frames:
@@ -694,7 +703,7 @@ class CameraMonitor:
                     
                     out.release()
                     
-                    # Save detection metadata
+                    # Create detection metadata
                     metadata = {
                         'video_info': {
                             'camera_name': self.camera_config.name,
@@ -710,22 +719,33 @@ class CameraMonitor:
                         'detections': self.recording_detections
                     }
                     
-                    with open(metadata_path, 'w') as f:
-                        json.dump(metadata, f, indent=2)
+                    # Save metadata locally if enabled
+                    if self.save_local:
+                        with open(metadata_path, 'w') as f:
+                            json.dump(metadata, f, indent=2)
+                        self.logger.info(f"Saved video: {video_path}")
+                        self.logger.info(f"Saved metadata: {metadata_path}")
                     
-                    self.logger.info(f"Saved video: {video_path}")
-                    self.logger.info(f"Saved metadata: {metadata_path}")
+                    # Upload to Minio if enabled
+                    if self.upload_minio:
+                        self.minio_uploader.upload_video_and_metadata(
+                            video_path=video_path,
+                            metadata=metadata,
+                            camera_name=self.camera_config.name,
+                            start_timestamp=start_timestamp
+                        )
                     
-                    # Upload to Minio if configured
-                    self.minio_uploader.upload_video_and_metadata(
-                        video_path=video_path,
-                        metadata=metadata,
-                        camera_name=self.camera_config.name,
-                        start_timestamp=start_timestamp
-                    )
+                    # Clean up temporary files if not saving locally
+                    if not self.save_local:
+                        video_path.unlink(missing_ok=True)
+                        metadata_path.unlink(missing_ok=True)
                     
             except Exception as e:
                 self.logger.error(f"Error saving clip: {e}")
+                # Clean up temp files on error
+                if not self.save_local:
+                    video_path.unlink(missing_ok=True)
+                    metadata_path.unlink(missing_ok=True)
         
         save_thread = threading.Thread(target=save_clip, daemon=True)
         save_thread.start()
@@ -820,8 +840,10 @@ class CameraMonitor:
 class MultiCameraWildlifeSystem:
     """Main system managing multiple cameras"""
     
-    def __init__(self, config_path: str):
+    def __init__(self, config_path: str, save_local: bool = True, upload_minio: bool = True):
         self.config_path = config_path
+        self.save_local = save_local
+        self.upload_minio = upload_minio
         self.logger = logging.getLogger("WildlifeSystem")
         
         # Load configuration
@@ -833,11 +855,13 @@ class MultiCameraWildlifeSystem:
         # Create camera monitors
         self.camera_monitors: Dict[str, CameraMonitor] = {}
         for camera_config in self.camera_configs:
-            monitor = CameraMonitor(camera_config, self.system_config, self.detection_config, self.detector)
+            monitor = CameraMonitor(camera_config, self.system_config, self.detection_config, 
+                                  self.detector, save_local=save_local, upload_minio=upload_minio)
             self.camera_monitors[camera_config.name] = monitor
         
-        # Setup output directory
-        Path(self.system_config.output_dir).mkdir(exist_ok=True)
+        # Setup output directory if local saving enabled
+        if save_local:
+            Path(self.system_config.output_dir).mkdir(exist_ok=True)
         
     def load_config(self):
         """Load configuration from YAML file"""
@@ -947,8 +971,32 @@ def main():
     parser = argparse.ArgumentParser(description='Multi-Camera Wildlife Detection System with Real-time Annotation')
     parser.add_argument('--config', default='config/cameras.yaml', help='YAML config file path')
     parser.add_argument('--log_level', default='INFO', help='Logging level')
+    parser.add_argument('--save-local', action='store_true', default=True,
+                       help='Save recordings to local filesystem (default)')
+    parser.add_argument('--no-local', action='store_true',
+                       help='Skip saving to local filesystem')
+    parser.add_argument('--upload-minio', action='store_true', default=True,
+                       help='Upload recordings to Minio (default)')
+    parser.add_argument('--no-minio', action='store_true',
+                       help='Skip uploading to Minio')
     
     args = parser.parse_args()
+    
+    # Validate storage arguments
+    if args.save_local and args.no_local:
+        print("Error: Cannot specify both --save-local and --no-local")
+        return
+    if args.upload_minio and args.no_minio:
+        print("Error: Cannot specify both --upload-minio and --no-minio")
+        return
+    
+    # Determine storage options
+    save_local = args.save_local and not args.no_local
+    upload_minio = (args.upload_minio or not args.save_local) and not args.no_minio
+    
+    if not save_local and not upload_minio:
+        print("Error: Must save somewhere - specify --save-local or --upload-minio")
+        return
     
     # Setup logging
     logging.basicConfig(
@@ -985,7 +1033,7 @@ cameras:
     
     try:
         # Create and start system
-        system = MultiCameraWildlifeSystem(args.config)
+        system = MultiCameraWildlifeSystem(args.config, save_local=save_local, upload_minio=upload_minio)
         system.start()
         
         # Status reporting loop
