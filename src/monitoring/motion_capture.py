@@ -86,6 +86,15 @@ class CameraConfig:
     name: str
     rtsp_url: str
     enabled: bool = True
+    # Detection configuration
+    detection_type: str = "model"  # "model", "motion", or "none"
+    model_path: Optional[str] = None
+    confidence_threshold: Optional[float] = None
+    # Motion detection parameters
+    motion_threshold: float = 0.02
+    pixel_threshold: int = 30
+    min_area: int = 500
+    blur_kernel: int = 5
 
 
 @dataclass
@@ -323,6 +332,76 @@ class MinioVideoUploader:
         )
 
 
+class MotionDetector:
+    """Frame-difference based motion detection"""
+    
+    def __init__(self, motion_threshold: float = 0.02, pixel_threshold: int = 30, 
+                 min_area: int = 500, blur_kernel: int = 5):
+        self.motion_threshold = motion_threshold
+        self.pixel_threshold = pixel_threshold
+        self.min_area = min_area
+        self.blur_kernel = blur_kernel
+        self.previous_frame = None
+        self.logger = logging.getLogger(__name__)
+        
+    def detect(self, frame: np.ndarray, confidence_threshold: float = None) -> list:
+        """
+        Detect motion in frame using frame differencing
+        
+        Returns:
+            List of Detection objects (motion areas as bounding boxes)
+        """
+        # Convert to grayscale
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        
+        # Apply Gaussian blur to reduce noise
+        gray = cv2.GaussianBlur(gray, (self.blur_kernel, self.blur_kernel), 0)
+        
+        # If no previous frame, store and return empty
+        if self.previous_frame is None:
+            self.previous_frame = gray
+            return []
+        
+        # Calculate absolute difference
+        diff = cv2.absdiff(self.previous_frame, gray)
+        
+        # Apply threshold
+        _, thresh = cv2.threshold(diff, self.pixel_threshold, 255, cv2.THRESH_BINARY)
+        
+        # Calculate motion ratio
+        motion_pixels = cv2.countNonZero(thresh)
+        total_pixels = thresh.shape[0] * thresh.shape[1]
+        motion_ratio = motion_pixels / total_pixels
+        
+        detections = []
+        
+        if motion_ratio > self.motion_threshold:
+            # Find contours for bounding boxes
+            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            for contour in contours:
+                area = cv2.contourArea(contour)
+                if area > self.min_area:
+                    x, y, w, h = cv2.boundingRect(contour)
+                    
+                    # Create detection with motion confidence based on area
+                    motion_confidence = min(0.95, area / (total_pixels * 0.1))
+                    
+                    detections.append(Detection(
+                        timestamp=time.time(),
+                        confidence=motion_confidence,
+                        bbox=(x, y, w, h),
+                        class_name="motion",
+                        frame_number=0,
+                        camera_name=""  # Will be set by caller
+                    ))
+        
+        # Update previous frame
+        self.previous_frame = gray
+        
+        return detections
+
+
 class WildlifeDetector:
     """YOLO-based wildlife detection model"""
     
@@ -407,14 +486,16 @@ class WildlifeDetector:
 class CameraMonitor:
     """Monitor for a single camera"""
     
-    def __init__(self, camera_config: CameraConfig, system_config: SystemConfig, detection_config: DetectionConfig, detector: WildlifeDetector, save_local: bool = True, upload_minio: bool = True):
+    def __init__(self, camera_config: CameraConfig, system_config: SystemConfig, detection_config: DetectionConfig, save_local: bool = True, upload_minio: bool = True):
         self.camera_config = camera_config
         self.system_config = system_config
         self.detection_config = detection_config
-        self.detector = detector
         self.save_local = save_local
         self.upload_minio = upload_minio
         self.logger = logging.getLogger(f"Camera-{camera_config.name}")
+        
+        # Create detector based on camera configuration
+        self.detector = self._create_detector()
         
         # Initialize Minio uploader
         self.minio_uploader = MinioVideoUploader(system_config.minio)
@@ -442,6 +523,31 @@ class CameraMonitor:
         self.capture_thread = None
         self.detection_thread = None
         self.frame_queue = queue.Queue(maxsize=30)
+    
+    def _create_detector(self):
+        """Create appropriate detector based on camera configuration"""
+        detection_type = self.camera_config.detection_type.lower()
+        
+        if detection_type == "motion":
+            self.logger.info(f"Using motion detection (threshold: {self.camera_config.motion_threshold})")
+            return MotionDetector(
+                motion_threshold=self.camera_config.motion_threshold,
+                pixel_threshold=self.camera_config.pixel_threshold,
+                min_area=self.camera_config.min_area,
+                blur_kernel=self.camera_config.blur_kernel
+            )
+        elif detection_type == "model":
+            # Use camera-specific model path if provided, otherwise fall back to global
+            model_path = self.camera_config.model_path or self.detection_config.model_path
+            self.logger.info(f"Using model detection (model: {model_path})")
+            return WildlifeDetector(model_path)
+        elif detection_type == "none":
+            self.logger.info("Detection disabled for this camera")
+            return None
+        else:
+            self.logger.warning(f"Unknown detection type '{detection_type}', using model detection")
+            model_path = self.camera_config.model_path or self.detection_config.model_path
+            return WildlifeDetector(model_path)
         
     def connect_camera(self) -> Optional[cv2.VideoCapture]:
         """Connect to RTSP camera stream"""
@@ -529,13 +635,18 @@ class CameraMonitor:
             try:
                 frame, timestamp = self.frame_queue.get(timeout=1.0)
                 
-                # Run detection
-                detections = self.detector.detect(frame, self.detection_config.confidence_threshold)
-                
-                # Add camera name to detections
-                for detection in detections:
-                    detection.camera_name = self.camera_config.name
-                    detection.timestamp = timestamp  # Ensure consistent timestamp
+                # Run detection if detector is available
+                detections = []
+                if self.detector:
+                    # Use camera-specific confidence threshold if provided, otherwise global
+                    confidence_threshold = (self.camera_config.confidence_threshold or 
+                                          self.detection_config.confidence_threshold)
+                    detections = self.detector.detect(frame, confidence_threshold)
+                    
+                    # Add camera name to detections
+                    for detection in detections:
+                        detection.camera_name = self.camera_config.name
+                        detection.timestamp = timestamp  # Ensure consistent timestamp
                 
                 # Process detections
                 if detections:
@@ -849,14 +960,11 @@ class MultiCameraWildlifeSystem:
         # Load configuration
         self.load_config()
         
-        # Initialize detector (shared across cameras)
-        self.detector = WildlifeDetector(self.detection_config.model_path)
-        
-        # Create camera monitors
+        # Create camera monitors (each creates its own detector)
         self.camera_monitors: Dict[str, CameraMonitor] = {}
         for camera_config in self.camera_configs:
             monitor = CameraMonitor(camera_config, self.system_config, self.detection_config, 
-                                  self.detector, save_local=save_local, upload_minio=upload_minio)
+                                  save_local=save_local, upload_minio=upload_minio)
             self.camera_monitors[camera_config.name] = monitor
         
         # Setup output directory if local saving enabled
@@ -902,7 +1010,16 @@ class MultiCameraWildlifeSystem:
             camera_config = CameraConfig(
                 name=camera_data['name'],
                 rtsp_url=camera_data['rtsp_url'],
-                enabled=camera_data.get('enabled', True)
+                enabled=camera_data.get('enabled', True),
+                # Detection configuration
+                detection_type=camera_data.get('detection_type', 'model'),
+                model_path=camera_data.get('model_path'),
+                confidence_threshold=camera_data.get('confidence_threshold'),
+                # Motion detection parameters
+                motion_threshold=camera_data.get('motion_threshold', 0.02),
+                pixel_threshold=camera_data.get('pixel_threshold', 30),
+                min_area=camera_data.get('min_area', 500),
+                blur_kernel=camera_data.get('blur_kernel', 5)
             )
             self.camera_configs.append(camera_config)
         
