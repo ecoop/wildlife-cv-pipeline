@@ -34,12 +34,14 @@ cameras:
     
   - name: east_fence
     rtsp_url: rtsp://USERNAME:PASSWORD@192.168.1.179/stream1
+    enabled: true
     detection_type: model  # model, motion, or none
     model_path: runs/detect/wildlife_detector_yolov8n/weights/best.pt
     confidence_threshold: 0.65
     
   - name: backyard
     rtsp_url: rtsp://USERNAME:PASSWORD@192.168.1.190/stream1
+    enabled: true
     detection_type: motion  # Motion detection for night/IR cameras
     motion_threshold: 0.02   # 2% of pixels must change
     pixel_threshold: 30      # Pixel intensity change threshold
