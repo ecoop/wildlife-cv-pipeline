@@ -673,9 +673,12 @@ class CameraMonitor:
     def handle_detections(self, detections: list, timestamp: float):
         """Handle detected animals"""
         for detection in detections:
+            x, y, w, h = detection.bbox
+            area = w * h
             self.logger.info(f"Detection: {detection.class_name} "
                            f"(confidence: {detection.confidence:.3f}) "
-                           f"bbox: {detection.bbox}")
+                           f"bbox: {detection.bbox} "
+                           f"area: {area} pixels")
             
             # Store detections during recording
             if self.recording:
