@@ -47,6 +47,8 @@ cameras:
     pixel_threshold: 30      # Pixel intensity change threshold
     min_area: 500           # Minimum motion area to trigger
     blur_kernel: 5          # Noise reduction
+    persistence_detections: 1  # Override global: only 1 detection needed for birds
+    persistence_frames: 3     # Override global: within 3 frames
     
   - name: west_fence
     rtsp_url: rtsp://USERNAME:PASSWORD@192.168.1.182/stream1

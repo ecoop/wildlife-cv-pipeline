@@ -95,6 +95,9 @@ class CameraConfig:
     pixel_threshold: int = 30
     min_area: int = 500
     blur_kernel: int = 5
+    # Persistence parameters
+    persistence_detections: Optional[int] = None
+    persistence_frames: Optional[int] = None
 
 
 @dataclass
@@ -511,8 +514,12 @@ class CameraMonitor:
         total_buffer_time = detection_config.buffer_before_seconds + detection_config.buffer_after_seconds
         self.frame_buffer = FrameBuffer(total_buffer_time, self.detection_fps)
         
-        # Detection state tracking
-        self.recent_detections = deque(maxlen=detection_config.persistence_frames)
+        # Detection state tracking - use camera-specific persistence settings with fallbacks
+        self.persistence_frames = (self.camera_config.persistence_frames or 
+                                  detection_config.persistence_frames)
+        self.persistence_detections = (self.camera_config.persistence_detections or 
+                                     detection_config.persistence_detections)
+        self.recent_detections = deque(maxlen=self.persistence_frames)
         self.recording = False
         self.recording_start_time = None
         self.last_detection_time = None
@@ -688,13 +695,13 @@ class CameraMonitor:
         
     def should_start_recording(self) -> bool:
         """Check if detection persistence criteria is met"""
-        if len(self.recent_detections) < self.detection_config.persistence_frames:
+        if len(self.recent_detections) < self.persistence_frames:
             return False
             
         recent_positive = sum(1 for has_detection in self.recent_detections 
                             if has_detection)
         
-        return (recent_positive >= self.detection_config.persistence_detections and 
+        return (recent_positive >= self.persistence_detections and 
                 not self.recording)
     
     def start_recording(self, detection_timestamp: float):
@@ -1019,7 +1026,10 @@ class MultiCameraWildlifeSystem:
                 motion_threshold=camera_data.get('motion_threshold', 0.02),
                 pixel_threshold=camera_data.get('pixel_threshold', 30),
                 min_area=camera_data.get('min_area', 500),
-                blur_kernel=camera_data.get('blur_kernel', 5)
+                blur_kernel=camera_data.get('blur_kernel', 5),
+                # Persistence parameters
+                persistence_detections=camera_data.get('persistence_detections'),
+                persistence_frames=camera_data.get('persistence_frames')
             )
             self.camera_configs.append(camera_config)
         
