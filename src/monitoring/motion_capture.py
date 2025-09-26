@@ -538,7 +538,7 @@ class CameraMonitor:
         detection_type = self.camera_config.detection_type.lower()
         
         if detection_type == "motion":
-            self.logger.info(f"Using motion detection (threshold: {self.camera_config.motion_threshold})")
+            self.logger.info(f"Using motion detection (threshold: {self.camera_config.motion_threshold}, min_area: {self.camera_config.min_area}, max_area: {self.camera_config.max_area})")
             return MotionDetector(
                 motion_threshold=self.camera_config.motion_threshold,
                 pixel_threshold=self.camera_config.pixel_threshold,
@@ -1039,6 +1039,22 @@ class MultiCameraWildlifeSystem:
                 persistence_frames=camera_data.get('persistence_frames')
             )
             self.camera_configs.append(camera_config)
+            
+            # Log the loaded configuration for debugging
+            self.logger.info(f"Loaded camera config for '{camera_config.name}':")
+            self.logger.info(f"  enabled: {camera_config.enabled}")
+            self.logger.info(f"  detection_type: {camera_config.detection_type}")
+            if camera_config.detection_type == 'motion':
+                self.logger.info(f"  motion_threshold: {camera_config.motion_threshold}")
+                self.logger.info(f"  pixel_threshold: {camera_config.pixel_threshold}")
+                self.logger.info(f"  min_area: {camera_config.min_area}")
+                self.logger.info(f"  max_area: {camera_config.max_area}")
+                self.logger.info(f"  blur_kernel: {camera_config.blur_kernel}")
+                self.logger.info(f"  persistence_detections: {camera_config.persistence_detections}")
+                self.logger.info(f"  persistence_frames: {camera_config.persistence_frames}")
+            elif camera_config.detection_type == 'model':
+                self.logger.info(f"  model_path: {camera_config.model_path}")
+                self.logger.info(f"  confidence_threshold: {camera_config.confidence_threshold}")
         
         self.logger.info(f"Loaded config for {len(self.camera_configs)} cameras")
         monitoring_fps = self.system_config.fps / self.detection_config.monitor_sampling_rate
