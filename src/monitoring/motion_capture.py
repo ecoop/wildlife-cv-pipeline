@@ -386,9 +386,13 @@ class MotionDetector:
             
             for contour in contours:
                 area = cv2.contourArea(contour)
+                x, y, w, h = cv2.boundingRect(contour)
+                
+                # Debug log large areas that should be filtered
+                if area > 15000:
+                    self.logger.warning(f"Large area detected: {area} pixels (bbox: {x}, {y}, {w}, {h}) - min_area: {self.min_area}, max_area: {self.max_area}")
+                
                 if self.min_area < area <= self.max_area:
-                    x, y, w, h = cv2.boundingRect(contour)
-                    
                     # Create detection with motion confidence based on area
                     motion_confidence = min(0.95, area / (total_pixels * 0.1))
                     
@@ -400,6 +404,8 @@ class MotionDetector:
                         frame_number=0,
                         camera_name=""  # Will be set by caller
                     ))
+                elif area > self.max_area:
+                    self.logger.debug(f"Filtered large area: {area} pixels (max_area: {self.max_area})")
         
         # Update previous frame
         self.previous_frame = gray
@@ -1125,8 +1131,8 @@ def main():
                        help='Save recordings to local filesystem (default)')
     parser.add_argument('--no-local', action='store_true',
                        help='Skip saving to local filesystem')
-    parser.add_argument('--upload-minio', action='store_true', default=True,
-                       help='Upload recordings to Minio (default)')
+    parser.add_argument('--upload-minio', action='store_true',
+                       help='Upload recordings to Minio')
     parser.add_argument('--no-minio', action='store_true',
                        help='Skip uploading to Minio')
     
@@ -1140,9 +1146,9 @@ def main():
         print("Error: Cannot specify both --upload-minio and --no-minio")
         return
     
-    # Determine storage options
-    save_local = args.save_local and not args.no_local
-    upload_minio = (args.upload_minio or not args.save_local) and not args.no_minio
+    # Determine storage options 
+    save_local = not args.no_local  # Default True unless --no-local
+    upload_minio = not args.no_minio  # Default True unless --no-minio
     
     if not save_local and not upload_minio:
         print("Error: Must save somewhere - specify --save-local or --upload-minio")
