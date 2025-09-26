@@ -94,6 +94,7 @@ class CameraConfig:
     motion_threshold: float = 0.02
     pixel_threshold: int = 30
     min_area: int = 500
+    max_area: int = 50000
     blur_kernel: int = 5
     # Persistence parameters
     persistence_detections: Optional[int] = None
@@ -339,10 +340,11 @@ class MotionDetector:
     """Frame-difference based motion detection"""
     
     def __init__(self, motion_threshold: float = 0.02, pixel_threshold: int = 30, 
-                 min_area: int = 500, blur_kernel: int = 5):
+                 min_area: int = 500, max_area: int = 50000, blur_kernel: int = 5):
         self.motion_threshold = motion_threshold
         self.pixel_threshold = pixel_threshold
         self.min_area = min_area
+        self.max_area = max_area
         self.blur_kernel = blur_kernel
         self.previous_frame = None
         self.logger = logging.getLogger(__name__)
@@ -384,7 +386,7 @@ class MotionDetector:
             
             for contour in contours:
                 area = cv2.contourArea(contour)
-                if area > self.min_area:
+                if self.min_area < area <= self.max_area:
                     x, y, w, h = cv2.boundingRect(contour)
                     
                     # Create detection with motion confidence based on area
@@ -541,6 +543,7 @@ class CameraMonitor:
                 motion_threshold=self.camera_config.motion_threshold,
                 pixel_threshold=self.camera_config.pixel_threshold,
                 min_area=self.camera_config.min_area,
+                max_area=self.camera_config.max_area,
                 blur_kernel=self.camera_config.blur_kernel
             )
         elif detection_type == "model":
@@ -1029,6 +1032,7 @@ class MultiCameraWildlifeSystem:
                 motion_threshold=camera_data.get('motion_threshold', 0.02),
                 pixel_threshold=camera_data.get('pixel_threshold', 30),
                 min_area=camera_data.get('min_area', 500),
+                max_area=camera_data.get('max_area', 50000),
                 blur_kernel=camera_data.get('blur_kernel', 5),
                 # Persistence parameters
                 persistence_detections=camera_data.get('persistence_detections'),
