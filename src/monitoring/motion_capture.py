@@ -389,12 +389,13 @@ class MotionDetector:
                 x, y, w, h = cv2.boundingRect(contour)
                 
                 # Debug log large areas that should be filtered
-                if area > 15000:
+                if area > self.max_area:
                     self.logger.warning(f"Large area detected: {area} pixels (bbox: {x}, {y}, {w}, {h}) - min_area: {self.min_area}, max_area: {self.max_area}")
                 
                 if self.min_area < area <= self.max_area:
                     # Create detection with motion confidence based on area
                     motion_confidence = min(0.95, area / (total_pixels * 0.1))
+                    self.logger.debug(f"Creating detection: area={area}, min_area={self.min_area}, max_area={self.max_area}")
                     
                     detections.append(Detection(
                         timestamp=time.time(),
